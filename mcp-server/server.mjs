@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// tastebud-read — read-only MCP server exposing Tastebud fingerprints to your agent.
+// tastebud-read - read-only MCP server exposing Tastebud fingerprints to your agent.
 // Register with any MCP-capable agent platform, e.g.:
 //   {"command": "node", "args": ["/path/to/tastebud-memory/mcp-server/server.mjs"]}
 // All tools shell out to tastebud.mjs, which never writes anything.

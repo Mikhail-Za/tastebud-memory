@@ -3,11 +3,11 @@
 //
 // Recommended production pattern (see docs/production-pattern.md):
 //   1. Your PRIMARY LLM (whatever your agent platform already runs on a schedule) tags
-//      yesterday's log and writes the result to <dataDir>/inbox/<date>.json — a tiny file write,
+//      yesterday's log and writes the result to <dataDir>/inbox/<date>.json - a tiny file write,
 //      easy for any agent to do reliably.
 //   2. This script runs ~an hour later as the SWEEPER: it ingests the inbox file
 //      deterministically. Only if the inbox is missing/invalid does it call a LOCAL fallback
-//      model itself — and every fallback is recorded in alerts.log with the reason, and
+//      model itself - and every fallback is recorded in alerts.log with the reason, and
 //      optionally pushed to you via config.notifyCommand.
 //
 // Modes:
@@ -61,9 +61,9 @@ CANONICAL SLUGS (normalize aliases to these): ${slugLines}
 RULES:
 1. MAJOR = substantive work (a section or several meaty bullets); MINOR = passing reference or status line.
 2. Major weights sum to 1.0, proportional to share of the day's substantive content.
-3. Routine status lines (service restarts, health checks) = minor at most — unless they are the day's ONLY content, in which case the routine item is the sole major with w=1.0.
+3. Routine status lines (service restarts, health checks) = minor at most - unless they are the day's ONLY content, in which case the routine item is the sole major with w=1.0.
 4. If one project's tooling is merely USED in service of another project, the subject project gets the major credit; the tool project is major only if the tool itself was built/changed.
-5. If a workstream matches NO slug exactly, invent a new kebab-case slug and list it under "new". NEVER force-fit a similar-sounding slug — inventing is correct, guessing is wrong.
+5. If a workstream matches NO slug exactly, invent a new kebab-case slug and list it under "new". NEVER force-fit a similar-sounding slug - inventing is correct, guessing is wrong.
 Respond with ONLY this JSON, no markdown fences, no commentary:
 {"major":[{"slug":"x","w":0.6}],"minor":["y"],"new":[]}`;
 
@@ -123,7 +123,7 @@ if (mode === 'nightly') {
 
   if (comps.days.some(d => d.date === date)) {
     if (existsSync(inboxPath)) { try { unlinkSync(inboxPath); console.log('cleaned stale inbox file'); } catch {} }
-    console.log(`${date} already tagged — nothing to do`);
+    console.log(`${date} already tagged - nothing to do`);
     process.exit(0);
   }
 
@@ -133,19 +133,19 @@ if (mode === 'nightly') {
       g = normalize(JSON.parse(readFileSync(inboxPath, 'utf8')));
       source = 'primary-cron';
     } catch (e) {
-      alert(`inbox file for ${date} exists but is INVALID (${e.message}) — primary tagger output malformed`);
+      alert(`inbox file for ${date} exists but is INVALID (${e.message}) - primary tagger output malformed`);
     }
   } else {
-    alert(`primary tagger did NOT produce a tag for ${date} (inbox empty) — check your scheduled tagging job`);
+    alert(`primary tagger did NOT produce a tag for ${date} (inbox empty) - check your scheduled tagging job`);
   }
 
   if (!g) {
     try {
       g = await localTag(date);
       source = 'local-fallback';
-      alert(`tagged ${date} with LOCAL FALLBACK (${LOCAL.model}) because the primary tagger failed — investigate`);
+      alert(`tagged ${date} with LOCAL FALLBACK (${LOCAL.model}) because the primary tagger failed - investigate`);
     } catch (e) {
-      alert(`ALL lanes failed for ${date}: ${e.message} — day left untagged, will NOT retry automatically`);
+      alert(`ALL lanes failed for ${date}: ${e.message} - day left untagged, will NOT retry automatically`);
       process.exit(1);
     }
   }
@@ -154,15 +154,15 @@ if (mode === 'nightly') {
   console.log(JSON.stringify(entry));
   const unknown = g.major.filter(m => !codebook.projects[m.slug]).map(m => m.slug);
   if (unknown.length)
-    alert(`unknown ingredient detected on ${date} (${unknown.join(', ')}) — run "node tastebud.mjs tasteslike <slug>" and consider adding it to the codebook.`);
+    alert(`unknown ingredient detected on ${date} (${unknown.join(', ')}) - run "node tastebud.mjs tasteslike <slug>" and consider adding it to the codebook.`);
   if (write) {
-    try { copyFileSync(compsPath, compsPath + '.bak'); } catch (e) { alert(`could not write compositions.json.bak (${e.message}) — aborting append to protect the data`); process.exit(1); }
+    try { copyFileSync(compsPath, compsPath + '.bak'); } catch (e) { alert(`could not write compositions.json.bak (${e.message}) - aborting append to protect the data`); process.exit(1); }
     comps.days.push(entry);
     comps.days.sort((x, y) => x.date.localeCompare(y.date));
     writeFileSync(compsPath, JSON.stringify(comps, null, 1));
     if (existsSync(inboxPath)) { try { unlinkSync(inboxPath); } catch {} }
     console.log(`appended ${date} to compositions.json (source: ${source})`);
-  } else console.log(`(dry-run — source would be: ${source})`);
+  } else console.log(`(dry-run - source would be: ${source})`);
 }
 
 else if (mode === 'test') {
@@ -179,7 +179,7 @@ else if (mode === 'test') {
     sumJ += j; n++;
     console.log(`${date}: jaccard=${j.toFixed(2)}  stored={${[...a].join(',')}}  got={${[...b].join(',')}}`);
   }
-  if (n) console.log(`agreement: avg major-set jaccard ${(sumJ / n).toFixed(2)} over ${n} day(s) — bar from our methodology: >=0.80`);
+  if (n) console.log(`agreement: avg major-set jaccard ${(sumJ / n).toFixed(2)} over ${n} day(s) - bar from our methodology: >=0.80`);
 }
 
 else { console.log('modes: nightly [date] [--write] | test <dates...>'); mkdirSync(INBOX, { recursive: true }); }

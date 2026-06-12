@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "notes": "SAMPLE codebook — replace with your own projects. Each key is a canonical slug; the slug string itself seeds the project's deterministic hypervector, so never rename a slug (add aliases instead). class is free-form. has_file marks whether the project has a durable memory/notes file yet — `gaps` uses it to find undocumented workstreams.",
+  "notes": "SAMPLE codebook - replace with your own projects. Each key is a canonical slug; the slug string itself seeds the project's deterministic hypervector, so never rename a slug (add aliases instead). class is free-form. has_file marks whether the project has a durable memory/notes file yet - `gaps` uses it to find undocumented workstreams.",
   "projects": {
     "home-lab":            { "aliases": ["homelab", "server rack", "proxmox"], "class": "ops", "has_file": false },
     "k8s-migration":       { "aliases": ["kubernetes migration", "cluster move"], "class": "ops", "has_file": true },

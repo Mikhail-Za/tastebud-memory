@@ -1,8 +1,8 @@
 #!/usr/bin/env node
-// Tastebud — compositional project fingerprints for agent memory.
+// Tastebud - compositional project fingerprints for agent memory.
 // Give every project a deterministic high-dimensional identity vector; every day's work is a
 // weighted blend of those vectors. One "taste" (a dot product) decomposes any day back into its
-// ingredients — including detecting ingredients nobody has named yet.
+// ingredients - including detecting ingredients nobody has named yet.
 //
 // Usage: node tastebud.mjs <command> [args]
 //   check                          validate data integrity
@@ -126,11 +126,11 @@ else if (cmd === 'decode') {
   const d = byDate[args[0]];
   if (!d) { console.log('no such day'); process.exit(1); }
   const b = bundle(d);
-  console.log(`${d.date} — ${d.oneline ?? ''}`);
+  console.log(`${d.date} - ${d.oneline ?? ''}`);
   console.log('recovered from vector alone (vs actual):');
   for (const { slug, est } of decodeBundle(b, allSlugsEver)) {
     const actual = d.major.find(m => m.slug === slug);
-    console.log(`  ${slug.padEnd(28)} est=${fmt(est)}  actual=${actual ? fmt(actual.w) : '—'}${KNOWN.has(slug) ? '' : '  [NOT IN CODEBOOK]'}`);
+    console.log(`  ${slug.padEnd(28)} est=${fmt(est)}  actual=${actual ? fmt(actual.w) : '-'}${KNOWN.has(slug) ? '' : '  [NOT IN CODEBOOK]'}`);
   }
   if (d.minor.length) console.log(`  minors (table): ${d.minor.join(', ')}`);
 }
@@ -150,7 +150,7 @@ else if (cmd === 'first') {
   const hits = days.filter(d => d.major.some(m => m.slug === slug) || d.minor.includes(slug));
   const majors = days.filter(d => d.major.some(m => m.slug === slug));
   if (!hits.length) { console.log('never seen'); process.exit(0); }
-  console.log(`${slug}: first mention ${hits[0].date}, first major ${majors[0]?.date ?? '—'}, last ${hits[hits.length - 1].date}, ${hits.length} day(s)`);
+  console.log(`${slug}: first mention ${hits[0].date}, first major ${majors[0]?.date ?? '-'}, last ${hits[hits.length - 1].date}, ${hits.length} day(s)`);
 }
 
 else if (cmd === 'cooccur') {
@@ -225,7 +225,7 @@ else if (cmd === 'backtest') {
   if (firstFlag) {
     const lag = (new Date(firstFlag) - new Date(firstAppear)) / 86400000;
     console.log(`RESULT: first flag ${firstFlag} (lag ${lag} day(s) after true first major), ${flagged} day(s) flagged`);
-  } else console.log('RESULT: never flagged — detector FAILED for this slug at this threshold');
+  } else console.log('RESULT: never flagged - detector FAILED for this slug at this threshold');
 }
 
 else if (cmd === 'drift') {
@@ -283,9 +283,9 @@ else if (cmd === 'tasteslike') {
     return { p, activity, companions };
   };
   const { p: target, activity, companions } = profile(slug);
-  if (!activity) { console.log(`"${slug}" never appears as major — nothing to taste`); process.exit(0); }
+  if (!activity) { console.log(`"${slug}" never appears as major - nothing to taste`); process.exit(0); }
   const cb = codebook.projects[slug];
-  console.log(`${slug}${cb ? ` (${cb.class ?? 'project'})` : '  [UNKNOWN INGREDIENT — not in codebook]'}`);
+  console.log(`${slug}${cb ? ` (${cb.class ?? 'project'})` : '  [UNKNOWN INGREDIENT - not in codebook]'}`);
   console.log('keeps company with (rarity-weighted co-occurrence):');
   [...companions.entries()].sort((a, b) => b[1] - a[1]).slice(0, 5)
     .forEach(([s, w]) => console.log(`  ${s.padEnd(28)} ${fmt(w / activity)}`));
