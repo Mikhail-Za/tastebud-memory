@@ -7,6 +7,50 @@ every day a project ever touched, and detects ingredients **nobody has named yet
 
 Zero dependencies. Two JSON files. ~600 lines of Node.
 
+## What it looks like
+
+```console
+$ node tastebud.mjs decode 2026-01-12        # un-mix one day from its 4096-dim vector alone
+2026-01-12 — Dosing pump driver; recipe-site deploy; soil sensors moved to bed 2
+recovered from vector alone (vs actual):
+  aquarium-controller          est=0.502  actual=0.500
+  recipe-site                  est=0.296  actual=0.300
+  garden-sensors               est=0.191  actual=0.200
+
+$ node tastebud.mjs gaps                     # what's been worked on but never documented?
+workstreams in logs with NO project file:
+  aquarium-controller            4 day(s)  mass=2.150  first=2026-01-10
+  home-lab                       3 day(s)  mass=1.550  first=2026-01-05
+  sourdough-lab                  2 day(s)  mass=0.900  first=2026-01-15  [NOT EVEN IN CODEBOOK]
+
+$ node tastebud.mjs tasteslike sourdough-lab # the unknown ingredient: what is it close to?
+sourdough-lab  [UNKNOWN INGREDIENT — not in codebook]
+keeps company with (rarity-weighted co-occurrence):
+  recipe-site                  0.463
+  aquarium-controller          0.201
+```
+
+That last one is the headline feature: `sourdough-lab` doesn't exist anywhere as a project —
+the nightly tagger *invented* the slug because nothing in the codebook fit, and the system
+flagged it and placed it next to its nearest relative. Your agent notices new workstreams
+forming **before you've named them**.
+
+## The pipeline
+
+```
+daily log (markdown)
+     │  nightly LLM tagger (rules + your codebook; invents slugs when nothing fits)
+     ▼
+composition row   {"date":"2026-01-12","major":[{"slug":"aquarium-controller","w":0.5},...]}
+     │  deterministic: slug string → seeded ±1 hypervector, day = weighted sum
+     ▼
+fingerprint (4096-dim)
+     │
+     ├─ decode / where / first / cooccur / window / diff / gaps   (exact membership queries)
+     ├─ similar / drift / tasteslike / backtest                   (vector-layer extras)
+     └─ MCP server → your agent tastes before it reads
+```
+
 ## The idea (and where it came from)
 
 This started as a question about hexadecimal colors: *what if every project had a unique color,
@@ -40,6 +84,17 @@ incapable of:
   volume bury the origin — this was a total miss in our baseline)
 - **Temporal set-difference**: "active in March, dead by June"
 - **Absence**: "which workstreams never got documentation?" (you can't embed a negation)
+
+One concrete failure from that baseline, because it's instructive: a business project had been
+renamed early in its life, and we asked search *"when did this start, including under its
+earlier name?"* — three query phrasings, increasingly charitable. Every one returned the
+later, high-volume era of the project; the actual origin date and rename event never surfaced,
+because similarity ranking structurally favors where the *bulk* of the writing is, and origins
+are by definition thin. `tastebud.mjs first <slug>` answers it exactly, because the codebook
+records the alias and the composition table records the date. Absence queries fail even worse:
+asked "which workstreams never got a project file," embedding search matched the literal phrase
+"project file" to documentation *about the memory system itself* — it cannot reason about what
+isn't there.
 
 Fingerprints answer all four exactly, in milliseconds, because composition is *recorded*, not
 inferred. Tastebud **complements** semantic search (meaning), it doesn't replace it (membership).
