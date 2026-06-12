@@ -47,7 +47,7 @@ inferred. Tastebud **complements** semantic search (meaning), it doesn't replace
 ## Quickstart (60 seconds)
 
 ```bash
-git clone https://github.com/YOUR_USER/tastebud-memory && cd tastebud-memory
+git clone https://github.com/Mikhail-Za/tastebud-memory && cd tastebud-memory
 node tastebud.mjs check                      # validate the sample data
 node tastebud.mjs decode 2026-01-12          # un-mix one day from its vector alone
 node tastebud.mjs where aquarium-controller  # every day that project ever touched
