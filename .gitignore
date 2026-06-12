@@ -1,0 +1,6 @@
+examples/alerts.log
+examples/inbox/
+*.bak
+nightly.log
+tmp-*
+node_modules/

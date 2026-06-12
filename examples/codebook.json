@@ -1,0 +1,16 @@
+{
+  "version": 1,
+  "notes": "SAMPLE codebook — replace with your own projects. Each key is a canonical slug; the slug string itself seeds the project's deterministic hypervector, so never rename a slug (add aliases instead). class is free-form. has_file marks whether the project has a durable memory/notes file yet — `gaps` uses it to find undocumented workstreams.",
+  "projects": {
+    "home-lab":            { "aliases": ["homelab", "server rack", "proxmox"], "class": "ops", "has_file": false },
+    "k8s-migration":       { "aliases": ["kubernetes migration", "cluster move"], "class": "ops", "has_file": true },
+    "recipe-site":         { "aliases": ["recipes app", "cooking site"], "class": "product", "has_file": true },
+    "budget-tracker":      { "aliases": ["finance app", "budget importer"], "class": "product", "has_file": true },
+    "aquarium-controller": { "aliases": ["reef controller", "pH probe", "ESP32 aquarium"], "class": "hardware", "has_file": false },
+    "garden-sensors":      { "aliases": ["soil sensors", "irrigation"], "class": "hardware", "has_file": false },
+    "novel-draft":         { "aliases": ["the book", "manuscript"], "class": "personal", "has_file": true },
+    "job-search":          { "aliases": ["applications", "interviews", "resume"], "class": "personal", "has_file": true },
+    "photo-archive":       { "aliases": ["photo backup", "family photos"], "class": "ops", "has_file": true },
+    "dungeon-campaign":    { "aliases": ["dnd", "session prep"], "class": "personal", "has_file": true }
+  }
+}
