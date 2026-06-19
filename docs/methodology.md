@@ -61,9 +61,42 @@ fixed-size encoding for fast whole-corpus matching.
 - Every entry carries provenance flags (`primary-cron` vs `local-fallback` vs `verified-corrected`).
 - A weekly triage closes the loop on unknown ingredients: each gets a proposal (create a
   project file, add an alias, or dismiss), with a human approving codebook changes. Slug choices
-  are permanent; they seed the vectors.
+  are permanent; they seed the vectors. The mature-before-asking protocol below governs *which*
+  unknowns reach that weekly review.
 - Schedule a retro ~2 weeks in: did the detector catch anything real? Does your agent actually
   call the tools? Are alerts signal or noise? Kill or keep on evidence.
+
+## Triage methodology: mature before asking, decide reversibly
+
+Detection without discipline is just a new source of noise. A residual detector that pinged you
+the first time any unnamed slug appeared would train you to ignore it inside a week. Two rules
+keep the unknown-ingredient loop trustworthy.
+
+**Mature before asking.** An unknown is not worth a decision the moment it appears. Most one-offs
+are exactly that: a slug the tagger minted for a single afternoon that never recurs. So an unknown
+ripens *silently* until it has earned a question, by one of three independent triggers: it recurs
+across enough days, it carries enough major weight, or it ages past about a week. Everything below
+that bar sits in a **Maturing** bucket that is logged but never surfaced for a decision. The
+thresholds (`TASTEBUD_RIPE_DAYS`, `TASTEBUD_RIPE_MASS`, `TASTEBUD_RIPE_AGE_DAYS`) are env-tunable,
+but the principle is fixed: let the corpus decide what is real before you spend attention on it.
+The weekly review (`unknowns --write`) acts only on ripe items; the Maturing list is FYI.
+
+**Decide reversibly, on a persistent ledger.** Every verdict is recorded in
+`<dataDir>/unknowns-ledger.json` and every one is reversible, because triage under uncertainty
+will be wrong sometimes and the cost of a wrong call should be a one-line undo, not a corrupted
+codebook:
+
+- **dismiss** is "not now," not "never." It records a baseline so a dismissed one-off *revives*
+  if it later grows past where you dismissed it, returning as something to watch.
+- **mint** is an undoable codebook write (`mint --undo`). The codebook itself stays append-only
+  (slugs seed vectors and are never renamed), but a *mistaken* add can be cleanly removed.
+- **watch** defers the call and keeps the item in view without nagging.
+- **alias** folds a name onto an existing project and resolves it; aliases are treated as known,
+  so the unknown leaves the list.
+
+Because the decision store is separate from the composition store, triage never risks your
+ground-truth history. Snapshots (`.bak`) are written before every codebook or ledger mutation, so
+even the irreversible-looking operations have a way back.
 
 ## Capacity and limits (be honest with yourself)
 

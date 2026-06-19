@@ -1,5 +1,7 @@
 examples/alerts.log
 examples/inbox/
+examples/unknowns-report.md
+examples/unknowns-ledger.json
 *.bak
 nightly.log
 tmp-*

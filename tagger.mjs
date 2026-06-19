@@ -11,7 +11,7 @@
 //      optionally pushed to you via config.notifyCommand.
 //
 // Modes:
-//   node tagger.mjs nightly [date] [--write]   sweep one day (default: yesterday); dry-run unless --write
+//   node tagger.mjs nightly [date] [--write]   sweep recent days (default: a bounded look-back window); dry-run unless --write
 //   node tagger.mjs test <date> [date...]      re-tag days with the local model, compare vs stored
 
 import { readFileSync, writeFileSync, appendFileSync, existsSync, unlinkSync, copyFileSync, mkdirSync } from 'node:fs';
@@ -32,9 +32,19 @@ const DATA = resolve(config._configDir, config.dataDir ?? './examples');
 const LOG_DIRS = (config.logDirs ?? []).map(d => resolve(config._configDir, d));
 const INBOX = join(DATA, 'inbox');
 const LOCAL = config.localModel ?? {};
+// Sibling engine, resolved next to this script (not the cwd), so the auto-file and
+// report-regeneration hooks work regardless of where the sweep is launched from.
+const ENGINE = join(SCRIPT_DIR, 'tastebud.mjs');
+
+// Look-back window: when no explicit date is given, a late-written log can still
+// be picked up on a later sweep within this window. Bounded - never an unbounded loop.
+const LOOKBACK_DAYS = Math.max(1, Number(process.env.TASTEBUD_LOOKBACK_DAYS) || 5);
+// A missing log is only worth a (soft) notify once it is genuinely old; younger
+// missing days are just "not written yet" and stay silent (console only, no notify).
+const STALE_DAYS = Math.max(1, Number(process.env.TASTEBUD_STALE_DAYS) || 2);
 
 function notify(text) {
-  // Optional push (Telegram/Slack/ntfy/etc): set config.notifyCommand to a shell command
+  // Optional push to any chat/alert service: set config.notifyCommand to a shell command
   // containing {message}, e.g. "ntfy publish my-topic \"{message}\"". Failures never break tagging.
   if (!config.notifyCommand) return;
   try {
@@ -45,6 +55,9 @@ function notify(text) {
 }
 
 function alert(msg) {
+  // A genuine FAILURE worth a human's attention: logged to alerts.log AND pushed via notify.
+  // Routine, non-failure notices (unknown ingredient seen, auto-filed a slug) must use
+  // console.log directly instead, so they never page anyone.
   const line = `[${new Date().toISOString()}] ${msg}`;
   try { appendFileSync(join(DATA, 'alerts.log'), line + '\n'); } catch {}
   console.log('ALERT: ' + msg);
@@ -111,20 +124,31 @@ async function localTag(date) {
   throw new Error(`local lane failed after 3 attempts: ${lastErr.message}`);
 }
 
-const [mode, ...rest] = process.argv.slice(2);
-
-if (mode === 'nightly') {
-  const write = rest.includes('--write');
-  const dateArg = rest.find(a => /^\d{4}-\d{2}-\d{2}$/.test(a));
-  const date = dateArg ?? new Date(Date.now() - 86400000).toISOString().slice(0, 10);
-  const compsPath = join(DATA, 'compositions.json');
-  const comps = JSON.parse(readFileSync(compsPath, 'utf8'));
+// Process exactly one date: ingest the primary inbox if present/valid, else fall back
+// to the LOCAL lane - BUT only when a daily log actually exists to tag. A date with no
+// log at all is not a tagging failure and must not trip the hard "ALL lanes failed" alarm.
+// Returns true if the day was tagged (and, when write, appended); false if skipped/no-log.
+async function processDate(date, { write, comps, compsPath, refDate }) {
   const inboxPath = join(INBOX, date + '.json');
 
   if (comps.days.some(d => d.date === date)) {
     if (existsSync(inboxPath)) { try { unlinkSync(inboxPath); console.log('cleaned stale inbox file'); } catch {} }
     console.log(`${date} already tagged - nothing to do`);
-    process.exit(0);
+    return false;
+  }
+
+  // No log written for this date yet: NOT a tagging failure. Do not run the fallback
+  // and do not emit the "primary produced no tag" alert (which presumes a log to tag).
+  if (!findLog(date)) {
+    // Age in whole days from this date to the reference (yesterday), midnight-to-midnight
+    // so it is independent of the wall-clock time the sweep happens to run at.
+    const ageDays = Math.round((Date.parse(refDate + 'T00:00:00Z') - Date.parse(date + 'T00:00:00Z')) / 86400000);
+    if (ageDays >= STALE_DAYS) {
+      alert(`no daily log was ever written for ${date} (now ${ageDays} days old) - nothing to tag, this is not a tagging failure`);
+    } else {
+      console.log(`${date}: no log yet - will retry on a later sweep`);
+    }
+    return false;
   }
 
   let g = null, source = null;
@@ -146,15 +170,16 @@ if (mode === 'nightly') {
       alert(`tagged ${date} with LOCAL FALLBACK (${LOCAL.model}) because the primary tagger failed - investigate`);
     } catch (e) {
       alert(`ALL lanes failed for ${date}: ${e.message} - day left untagged, will NOT retry automatically`);
-      process.exit(1);
+      return false;
     }
   }
 
   const entry = { date, major: g.major, minor: g.minor, new: g.new, flags: ['nightly', source], oneline: '' };
   console.log(JSON.stringify(entry));
+  // Routine notice only: log it to the console, never page anyone via notify.
   const unknown = g.major.filter(m => !codebook.projects[m.slug]).map(m => m.slug);
   if (unknown.length)
-    alert(`unknown ingredient detected on ${date} (${unknown.join(', ')}) - run "node tastebud.mjs tasteslike <slug>" and consider adding it to the codebook.`);
+    console.log(`unknown ingredient detected on ${date} (${unknown.join(', ')}) - run "node tastebud.mjs tasteslike <slug>" and consider adding it to the codebook.`);
   if (write) {
     try { copyFileSync(compsPath, compsPath + '.bak'); } catch (e) { alert(`could not write compositions.json.bak (${e.message}) - aborting append to protect the data`); process.exit(1); }
     comps.days.push(entry);
@@ -163,6 +188,76 @@ if (mode === 'nightly') {
     if (existsSync(inboxPath)) { try { unlinkSync(inboxPath); } catch {} }
     console.log(`appended ${date} to compositions.json (source: ${source})`);
   } else console.log(`(dry-run - source would be: ${source})`);
+  return true;
+}
+
+const [mode, ...rest] = process.argv.slice(2);
+
+if (mode === 'nightly') {
+  const write = rest.includes('--write');
+  const dateArg = rest.find(a => /^\d{4}-\d{2}-\d{2}$/.test(a));
+  const compsPath = join(DATA, 'compositions.json');
+  const comps = JSON.parse(readFileSync(compsPath, 'utf8'));
+
+  // Same UTC "yesterday" reference the script has always used; the look-back window
+  // is computed from this same instant so behavior is fully deterministic per run.
+  const ref = Date.now() - 86400000;
+  const refDate = new Date(ref).toISOString().slice(0, 10);
+
+  let dates;
+  if (dateArg) {
+    // Explicit date: process ONLY that one day, no look-back (preserves prior behavior).
+    dates = [dateArg];
+  } else {
+    // Default: backfill (yesterday - LOOKBACK_DAYS + 1) .. yesterday, OLDEST first,
+    // so a late-written log gets picked up on a subsequent sweep. Days already in
+    // compositions are skipped inside processDate.
+    dates = [];
+    for (let i = LOOKBACK_DAYS - 1; i >= 0; i--)
+      dates.push(new Date(ref - i * 86400000).toISOString().slice(0, 10));
+  }
+
+  for (const date of dates)
+    await processDate(date, { write, comps, compsPath, refDate });
+
+  // All date processing is complete; tagging will not be touched past this point.
+  // Best-effort auto-file: mint open unknowns that ALREADY qualify so the codebook
+  // absorbs them before the report below is regenerated. Runs only on a real write run.
+  // Any failure (non-zero status, thrown error, or timeout) is logged to the CONSOLE
+  // ONLY and must never throw out of here and never change the exit code. The AUTOFILED:
+  // contract line is reported to the console only - it never pages anyone via notify.
+  if (write) {
+    try {
+      const r = spawnSync('node', [ENGINE, 'autofile', '--write'], { encoding: 'utf8', timeout: 60000 });
+      if (r.error) console.log(`(autofile failed: ${r.error.message})`);
+      else if (r.status !== 0) console.log(`(autofile failed: exit ${r.status} ${(r.stderr || r.stdout || '').slice(0, 200)})`);
+      else {
+        const out = String(r.stdout || '');
+        let filed = null;
+        for (const m of out.matchAll(/^AUTOFILED:\s*(.+?)\s*$/gm)) filed = m[1].trim();
+        if (filed && filed !== 'none') {
+          const slugs = filed.split(/\s+/).filter(Boolean);
+          if (slugs.length)
+            console.log(`auto-filed ${slugs.length} project(s) to the codebook: ${slugs.join(' ')} - undo any with: node tastebud.mjs mint <slug> --undo`);
+        }
+        console.log(`autofile complete (${filed && filed !== 'none' ? filed : 'none'})`);
+      }
+    } catch (e) { console.log(`(autofile failed: ${e.message})`); }
+  }
+
+  // All date processing is complete; tagging will not be touched past this point.
+  // Best-effort: regenerate the unknown-ingredient report via the sibling engine.
+  // Only on a real write run, so dry-runs stay side-effect-free. Any failure
+  // (non-zero status, thrown error, or timeout) is logged to the CONSOLE ONLY and must
+  // never throw out of here, never change the exit code, and never affect tagging.
+  if (write) {
+    try {
+      const r = spawnSync('node', [ENGINE, 'unknowns', '--write'], { encoding: 'utf8', timeout: 60000 });
+      if (r.error) console.log(`(unknowns report regen failed: ${r.error.message})`);
+      else if (r.status !== 0) console.log(`(unknowns report regen failed: exit ${r.status} ${(r.stderr || r.stdout || '').slice(0, 200)})`);
+      else console.log('regenerated unknowns-report.md');
+    } catch (e) { console.log(`(unknowns report regen failed: ${e.message})`); }
+  }
 }
 
 else if (mode === 'test') {

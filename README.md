@@ -28,12 +28,19 @@ sourdough-lab  [UNKNOWN INGREDIENT - not in codebook]
 keeps company with (rarity-weighted co-occurrence):
   recipe-site                  0.463
   aquarium-controller          0.201
+
+$ node tastebud.mjs unknowns                 # triage: which unknowns are RIPE to decide on?
+unknowns: 1 total  (decide 1, maturing 0)
+  sourdough-lab                open 155d   2 day(s)  mass=0.900  [OVERDUE  ]  -> alias->recipe-site
 ```
 
-That last one is the headline feature. `sourdough-lab` doesn't exist anywhere as a project:
+Those last two are the headline feature. `sourdough-lab` doesn't exist anywhere as a project:
 the nightly tagger *invented* the slug because nothing in the codebook fit, and the system
 flagged it and placed it next to its nearest relative. Your agent notices new workstreams
-forming **before you've named them**.
+forming **before you've named them** and then helps you decide what to do about each one. The
+`-> alias->recipe-site` is a *recommendation*, not a decision: `sourdough-lab` keeps company
+almost entirely with `recipe-site`, so the system reads it as the same work and suggests folding
+it in. You stay in charge: you could mint it as its own project instead, dismiss it, or wait.
 
 ## The pipeline
 
@@ -48,6 +55,7 @@ fingerprint (4096-dim)
      │
      ├─ decode / where / first / cooccur / window / diff / gaps   (exact membership queries)
      ├─ similar / drift / tasteslike / backtest                   (vector-layer extras)
+     ├─ unknowns / mint / alias / dismiss / watch / autofile      (ripen-then-decide triage loop)
      └─ MCP server → your agent tastes before it reads
 ```
 
@@ -100,6 +108,56 @@ isn't there.
 Fingerprints answer all four exactly, in milliseconds, because composition is *recorded*, not
 inferred. Tastebud **complements** semantic search (meaning); it doesn't replace it (membership).
 
+## The unknown-ingredient loop (detect, ripen, decide, reverse)
+
+Detecting an unnamed workstream is only half the job. The other half is deciding what it *is*,
+without being nagged about every fleeting one-off and without making a single irreversible
+mistake. Tastebud closes that loop with a full triage + reversible-decision system. The chef
+keeps tasting; you only get asked once a dish is worth a verdict.
+
+**Detection is continuous but silent.** Every night the sweeper notices new unknown slugs and
+logs them. No pings. A brand-new slug seen once is not a reason to interrupt you.
+
+**Mature before asking.** An unknown is *not* surfaced for a decision until it ripens: it has to
+recur across days, accumulate real major weight, or age past about a week. Thin one-offs sit
+quietly in a **Maturing** bucket and never nag. A workstream that shows up for one afternoon and
+vanishes was noise; a workstream that keeps coming back has earned a question. All the thresholds
+are env-tunable (`TASTEBUD_RIPE_DAYS`, `TASTEBUD_RIPE_MASS`, `TASTEBUD_RIPE_AGE_DAYS`, and more).
+
+**Auto-file the obvious.** If an unknown already has a project file on disk (config `projectsDir`),
+the nightly sweeper files it into the codebook automatically. A file means a human already judged
+it a real project, so there is nothing to ask. Logged, not pinged.
+
+**Weekly digest decides only ripe items.** Once a week a review surfaces *only* the ripe unknowns,
+each with a recommendation (**mint** / **alias** / **dismiss** / **watch**) plus the context behind
+it, pushed through the config `notifyCommand`. Everything still maturing stays out of your way.
+
+**Every decision is reversible.** Triage state lives in a persistent ledger
+(`<dataDir>/unknowns-ledger.json`). Nothing you decide is permanent:
+
+- **dismiss** means "not now," not "never." A dismissed one-off *revives* if it starts growing
+  again, and comes back recommended as something to watch.
+- **mint** writes the slug into the codebook, and is fully undoable with `mint --undo`.
+- **watch** parks it on a watchlist: out of the decide queue, still in view.
+- **alias** folds a name into an existing project and resolves it. The engine treats codebook
+  aliases as known, so the unknown leaves the list for good (until you remove the alias).
+
+```console
+$ node tastebud.mjs unknowns                 # what is ripe to decide on right now?
+unknowns: 1 total  (decide 1, maturing 0)
+  sourdough-lab                open 155d   2 day(s)  mass=0.900  [OVERDUE  ]  -> alias->recipe-site
+
+$ node tastebud.mjs alias sourdough-lab recipe-site   # fold it in; it now resolves
+$ node tastebud.mjs watch sourdough-lab "keep an eye on it"   # or defer the call
+$ node tastebud.mjs mint sourdough-lab --class product        # or make it its own project
+$ node tastebud.mjs mint sourdough-lab --undo                 # changed your mind: undo it
+```
+
+The recommendation is a hint, never a decision. Here `sourdough-lab` co-occurs almost entirely
+with `recipe-site`, so the system suggests aliasing it; a human who knows it is a distinct effort
+can mint it instead. The point of the loop is that you make the call, late enough to be sure, and
+can always take it back.
+
 ## Quickstart (60 seconds)
 
 ```bash
@@ -110,7 +168,22 @@ node tastebud.mjs where aquarium-controller  # every day that project ever touch
 node tastebud.mjs gaps                       # workstreams with no documentation
 node tastebud.mjs tasteslike sourdough-lab   # an UNKNOWN ingredient: what is it close to?
 node tastebud.mjs backtest aquarium-controller  # would the detector have caught this project emerging?
+node tastebud.mjs unknowns                   # the triage queue: which unknowns are ripe to decide?
 node tastebud.mjs color 2026-01-12           # the original metaphor, as garnish
+```
+
+The unknown-ingredient loop adds its own small command set (all reversible, all snapshot before
+they write):
+
+```bash
+node tastebud.mjs unknowns --write           # write unknowns-report.md (Decide / Watching / Maturing)
+node tastebud.mjs alias sourdough-lab recipe-site   # fold a name into a project; it now resolves
+node tastebud.mjs mint sourdough-lab --class product  # promote an unknown to its own codebook slug
+node tastebud.mjs mint sourdough-lab --undo  # reverse a mint
+node tastebud.mjs dismiss sourdough-lab "one-off"   # "not now"; revives if it grows again
+node tastebud.mjs watch sourdough-lab        # park on the watchlist, out of the decide queue
+node tastebud.mjs decisions                  # the persistent decision ledger, grouped by status
+node tastebud.mjs autofile                   # dry-run filing unknowns that already have a project file
 ```
 
 The sample data is a fictional fortnight that includes an emerging project and an unknown
@@ -126,8 +199,14 @@ ingredient, so every command above demonstrates something real.
 3. **Nightly**: schedule your platform's LLM to tag yesterday into `inbox/<date>.json`
    (prompt template provided), and run `node tagger.mjs nightly --write` an hour later as the
    deterministic sweeper. If the primary fails, a local model takes over and you get an alert
-   with the reason (`notifyCommand` in config can point at Telegram, Slack, ntfy, anything).
-4. **Agent integration**: register `mcp-server/server.mjs` (standard MCP, stdio) so your agent
+   with the reason (`notifyCommand` in config can point at Slack, ntfy, a webhook, anything).
+   The same nightly pass logs new unknown slugs silently and auto-files any that already have a
+   project file (config `projectsDir`); it does not interrupt you for either.
+4. **Weekly decision loop**: once a week run `node tastebud.mjs unknowns --write` and review only
+   the ripe unknowns, each with a recommendation. Decide with `mint` / `alias` / `dismiss` /
+   `watch`; every call is reversible and snapshots before it writes. See
+   [`docs/production-pattern.md`](docs/production-pattern.md) for the wiring.
+5. **Agent integration**: register `mcp-server/server.mjs` (standard MCP, stdio) so your agent
    can *taste before reading*: decode a day in milliseconds, then fetch only the logs that matter.
 
 ## What this is not
