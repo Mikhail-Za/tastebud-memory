@@ -25,6 +25,7 @@
 //   decisions                      print the persistent decision ledger grouped by status
 //   autofile [--write]             auto-file the safe class of unknowns (has project file + seen as major)
 //   color <date|slug>              hex color garnish (the metaphor this project started with)
+//   digest                         plain-text status digest to stdout (Decide queue + pulse)
 //
 // Config: tastebud.config.json in the current directory or next to this script.
 // Optional config keys used here: projectsDir (dir of <slug>.md project files) for autofile/has_file.
@@ -737,6 +738,63 @@ else if (cmd === 'autofile') {
   console.log(`AUTOFILED: ${result.length ? result.join(' ') : 'none'}`);
 }
 
+else if (cmd === 'digest') {
+  // Compose a plain-text status digest (aligned monospace, no markdown tables) and print to
+  // stdout. Reuses computeUnknownRows / loadLedger / today / days / KNOWN / fmt. A notifier
+  // (e.g. the sweeper's config.notifyCommand hook) can push this text wherever you like.
+  const rows = computeUnknownRows();
+  // Decide order MUST match writeUnknownsReport: overdue first, then major_mass desc, then slug.
+  const decide = rows
+    .filter(r => (r.status === 'open' && r.ripe) || r.revived)
+    .sort((a, b) => (b.overdue - a.overdue) || (b.major_mass - a.major_mass) || a.slug.localeCompare(b.slug));
+  const maturingN = rows.filter(r => r.status === 'open' && r.maturing).length;
+  const latest = days[days.length - 1];
+  const topSlug = latest && latest.major[0] ? latest.major[0].slug : '(none)';
+  const latestDay = latest ? latest.date : '(none)';
+  const slugN = KNOWN.size;
+  const ymd = today();
+
+  // recently: ledger entries decided today or yesterday (UTC), grouped by status.
+  const yest = new Date(Date.now() - 86400000).toISOString().slice(0, 10);
+  const recentByStatus = new Map();
+  for (const [slug, e] of Object.entries(loadLedger().entries)) {
+    if (e.decided_on === ymd || e.decided_on === yest) {
+      if (!recentByStatus.has(e.status)) recentByStatus.set(e.status, []);
+      recentByStatus.get(e.status).push(slug);
+    }
+  }
+  const recent = [...recentByStatus.entries()]
+    .map(([status, slugs]) => `${status} ${slugs.join(', ')}`)
+    .join('; ');
+
+  const verdict = r => r.recommend === 'mint' ? 'MINT'
+    : r.recommend === 'alias' ? `ALIAS onto ${r.recommendTarget}`
+    : r.recommend === 'watch' ? 'WATCH'
+    : 'DISMISS';
+  const mass2 = n => n.toFixed(2);
+
+  const out = [];
+  if (decide.length > 0) {
+    out.push(`🎨 Tastebud - ${ymd}`);
+    out.push(`DECIDE (${decide.length} need your call):`);
+    for (const r of decide) {
+      out.push(`  ${r.slug.padEnd(26)} ${r.age}d  mass ${mass2(r.major_mass)}  -> ${verdict(r)}`);
+    }
+    const f = decide[0].slug;
+    out.push(`  reply: "dismiss ${f}" / "mint ${f}" / "watch ${f}" / "alias ${f} onto <someExistingCodebookSlug>"`);
+    out.push('');
+    out.push(`tagged ${latestDay} (${topSlug}) | maturing ${maturingN} | ${slugN} slugs | ok`);
+    if (recent) out.push(`recently: ${recent}`);
+  } else {
+    let pulse = `🎨 Tastebud - ${ymd}: tagged ${latestDay} (${topSlug}). 0 to decide.`;
+    if (maturingN > 0) pulse += ` ${maturingN} maturing.`;
+    pulse += ` ${slugN} slugs, ok.`;
+    out.push(pulse);
+    if (recent) out.push(`recently: ${recent}`);
+  }
+  console.log(out.join('\n'));
+}
+
 else {
-  console.log('commands: check decode where first cooccur window diff gaps backtest drift similar tasteslike color unknowns mint alias dismiss watch decisions autofile');
+  console.log('commands: check decode where first cooccur window diff gaps backtest drift similar tasteslike color unknowns mint alias dismiss watch decisions autofile digest');
 }

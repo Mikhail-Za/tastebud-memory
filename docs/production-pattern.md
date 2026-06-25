@@ -16,11 +16,13 @@ Windows; everything here translates to cron/systemd/launchd + any agent platform
        └─ new unknown major slugs → LOG silently to the triage queue (no ping; they ripen first)
        └─ unknown that already has a project file → AUTO-FILE into the codebook (logged, not pinged)
        └─ snapshots compositions.json → .bak BEFORE every append (refuses to append if that fails)
+       └─ regenerates <dataDir>/unknowns-report.md, then composes a DAILY DIGEST (the ripe decide
+          queue + recommendations, or a one-line pulse; recent decisions; no-log days folded in)
+          and sends it via notifyCommand: one consolidated push per run
 
-Sun  WEEKLY DIGEST - plain cron, runs tastebud.mjs unknowns --write
-       └─ surfaces ONLY ripe unknowns, each with a recommendation (mint/alias/dismiss/watch)
-       └─ writes <dataDir>/unknowns-report.md and pushes it via notifyCommand (the one weekly ping)
-       └─ Maturing items stay logged-only; you are not asked about them
+Sun  WEEKLY ROLLUP - optional, plain cron. A light strategic summary only: week-over-week shift,
+       any item left undecided all week, workstreams still unfiled. The DAILY digest above owns
+       per-item decisions, so this does not re-propose them.
 ```
 
 ## Why this split (each rule bought with a scar)
@@ -31,12 +33,13 @@ Sun  WEEKLY DIGEST - plain cron, runs tastebud.mjs unknowns --write
   your main model via OAuth, don't extract the token for a standalone script. Route the call
   through the platform's own scheduler (that's what the inbox handoff enables) and let it own
   token refresh.
-- **Silence means success, and routine detection is silent.** The only pushes (config
-  `notifyCommand`; point it at Slack, ntfy, a webhook, anything) are *failures* and the *weekly
-  digest*: primary failed (with the reason, so you can investigate), fallback used, all lanes
-  dead, or the once-a-week ripe-unknown review. Finding a new unknown ingredient is **not** a
-  push anymore: the sweeper logs it to the triage queue to ripen, and only the weekly digest
-  asks you about the ones that matured. Have a periodic job re-send alerts whose push failed.
+- **One consolidated daily push; routine events fold into it.** The pushes (config
+  `notifyCommand`; point it at Slack, ntfy, a webhook, anything) are *failures* (immediate, with
+  the reason: primary failed, fallback used, all lanes dead) and the *daily digest*. Finding a new
+  unknown ingredient is not its own ping: the sweeper logs it to the triage queue to ripen, and it
+  only appears in the digest once it has matured. Routine no-log days fold into the digest as one
+  line instead of re-firing nightly. The digest is a short pulse when nothing needs you and expands
+  to the ripe decide queue when it does. Have a periodic job re-send alerts whose push failed.
 - **Auto-file the unambiguous unknowns.** If an unknown slug already has a project file on disk
   (config `projectsDir`) and has shown up as major work, a human already decided it is a real
   project; asking again is busywork. The nightly pass files it into the codebook automatically
@@ -62,10 +65,11 @@ Sun  WEEKLY DIGEST - plain cron, runs tastebud.mjs unknowns --write
   weekly triage doesn't need the MCP tools. compositions.json and codebook.json are just files;
   `read` is enough.
 
-## The weekly decision loop (ripe-only, reversible)
+## The decision loop (ripe-only, reversible)
 
-The nightly pass detects and ripens; the weekly pass decides. Keep them separate so day-to-day
-noise never reaches you and the one weekly touchpoint is high-signal.
+The nightly pass detects, ripens, and sends the daily digest; you decide from the digest. Keeping
+detection silent and surfacing only ripe items means day-to-day noise never reaches you and the
+digest stays high-signal.
 
 - **Surface only what is ripe.** `tastebud.mjs unknowns --write` writes `unknowns-report.md` with
   three sections: **Decide** (ripe, with a recommendation and the reasoning), **Watching** (parked

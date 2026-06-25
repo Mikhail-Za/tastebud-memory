@@ -43,6 +43,10 @@ const LOOKBACK_DAYS = Math.max(1, Number(process.env.TASTEBUD_LOOKBACK_DAYS) || 
 // missing days are just "not written yet" and stay silent (console only, no notify).
 const STALE_DAYS = Math.max(1, Number(process.env.TASTEBUD_STALE_DAYS) || 2);
 
+// Run-scoped collector for stale-missing-log days. These are NO LONGER a separate notify
+// (folded into the nightly digest as a single trailing note instead). Console-only here.
+const nologDays = [];
+
 function notify(text) {
   // Optional push to any chat/alert service: set config.notifyCommand to a shell command
   // containing {message}, e.g. "ntfy publish my-topic \"{message}\"". Failures never break tagging.
@@ -144,7 +148,9 @@ async function processDate(date, { write, comps, compsPath, refDate }) {
     // so it is independent of the wall-clock time the sweep happens to run at.
     const ageDays = Math.round((Date.parse(refDate + 'T00:00:00Z') - Date.parse(date + 'T00:00:00Z')) / 86400000);
     if (ageDays >= STALE_DAYS) {
-      alert(`no daily log was ever written for ${date} (now ${ageDays} days old) - nothing to tag, this is not a tagging failure`);
+      // Folded: no separate notify. Console-only, and collect for the nightly digest note.
+      console.log(`no daily log was ever written for ${date} (now ${ageDays} days old) - nothing to tag, this is not a tagging failure`);
+      nologDays.push(date);
     } else {
       console.log(`${date}: no log yet - will retry on a later sweep`);
     }
@@ -257,6 +263,27 @@ if (mode === 'nightly') {
       else if (r.status !== 0) console.log(`(unknowns report regen failed: exit ${r.status} ${(r.stderr || r.stdout || '').slice(0, 200)})`);
       else console.log('regenerated unknowns-report.md');
     } catch (e) { console.log(`(unknowns report regen failed: ${e.message})`); }
+  }
+
+  // Nightly digest: compose via the engine's `digest` command and push through the SAME generic
+  // notify mechanism the alerts use (config.notifyCommand {message} hook). Fires once per nightly
+  // run, whether or not new days were tagged. Best-effort and fully try/caught: this can NEVER
+  // throw, change the exit code, or affect tagging (which is already complete and untouched above).
+  // Any stale-missing-log days collected this run are folded in as a single trailing note.
+  if (write) {
+    try {
+      const r = spawnSync('node', [ENGINE, 'digest'], { encoding: 'utf8', timeout: 60000 });
+      if (r.error) console.log(`(digest send failed: ${r.error.message})`);
+      else if (r.status !== 0) console.log(`(digest send failed: exit ${r.status} ${(r.stderr || r.stdout || '').slice(0, 200)})`);
+      else {
+        let text = String(r.stdout || '').trim();
+        if (text) {
+          if (nologDays.length) text += `\n(no log: ${nologDays.join(', ')})`;
+          notify(text);
+          console.log('sent nightly digest');
+        } else console.log('(digest send skipped: empty digest output)');
+      }
+    } catch (e) { console.log(`(digest send failed: ${e.message})`); }
   }
 }
 

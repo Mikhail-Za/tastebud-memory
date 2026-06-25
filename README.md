@@ -183,6 +183,7 @@ node tastebud.mjs mint sourdough-lab --undo  # reverse a mint
 node tastebud.mjs dismiss sourdough-lab "one-off"   # "not now"; revives if it grows again
 node tastebud.mjs watch sourdough-lab        # park on the watchlist, out of the decide queue
 node tastebud.mjs decisions                  # the persistent decision ledger, grouped by status
+node tastebud.mjs digest                     # the daily report: ripe decide queue + recent decisions (push via notifyCommand)
 node tastebud.mjs autofile                   # dry-run filing unknowns that already have a project file
 ```
 
