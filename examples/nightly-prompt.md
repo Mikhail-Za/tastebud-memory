@@ -18,7 +18,8 @@ Your ONLY task: produce a project-composition tag for YESTERDAY's daily log and 
    - Routine status lines = minor at most - unless they are the day's ONLY content, in which case that routine item is the sole major with w=1.0.
    - If one project's tooling is merely USED in service of another project, the subject project gets the major credit.
    - If a workstream matches NO slug exactly, invent a new kebab-case slug and list it under `new`. NEVER force-fit a similar-sounding slug.
+   - `oneline` = ONE factual summary of the day, max 70 characters, plain ASCII, dominant workstream first, fragments separated by semicolons. This is what makes `decode`/`where`/`similar` output readable, so do not skip it.
 6. Write EXACTLY one new file - `<dataDir>/inbox/<date>.json` - containing only this JSON:
-   `{"major":[{"slug":"x","w":0.6},{"slug":"y","w":0.4}],"minor":["z"],"new":[]}`
+   `{"major":[{"slug":"x","w":0.6},{"slug":"y","w":0.4}],"minor":["z"],"new":[],"oneline":"<the one-line day summary>"}`
 7. Do NOT modify compositions.json, the logs, or any other file.
 8. Reply with one line: the date and the major slugs you assigned.

@@ -38,7 +38,7 @@ const ENGINE = join(SCRIPT_DIR, 'tastebud.mjs');
 
 // Look-back window: when no explicit date is given, a late-written log can still
 // be picked up on a later sweep within this window. Bounded - never an unbounded loop.
-const LOOKBACK_DAYS = Math.max(1, Number(process.env.TASTEBUD_LOOKBACK_DAYS) || 5);
+const LOOKBACK_DAYS = Math.max(1, Number(process.env.TASTEBUD_LOOKBACK_DAYS) || 10);
 // A missing log is only worth a (soft) notify once it is genuinely old; younger
 // missing days are just "not written yet" and stay silent (console only, no notify).
 const STALE_DAYS = Math.max(1, Number(process.env.TASTEBUD_STALE_DAYS) || 2);
@@ -157,11 +157,15 @@ async function processDate(date, { write, comps, compsPath, refDate }) {
     return false;
   }
 
-  let g = null, source = null;
+  let g = null, source = null, oneline = '';
   if (existsSync(inboxPath)) {
     try {
-      g = normalize(JSON.parse(readFileSync(inboxPath, 'utf8')));
-      source = 'primary-cron';
+      const raw = JSON.parse(readFileSync(inboxPath, 'utf8'));
+      g = normalize(raw);
+      // oneline rides along in the inbox JSON (see examples/nightly-prompt.md); older files without it get ''.
+      if (typeof raw.oneline === 'string') oneline = raw.oneline.trim().slice(0, 100);
+      // provenance may be overridden by the inbox writer (e.g. a supervised backfill); default = the primary cron.
+      source = (typeof raw.source === 'string' && /^[a-z0-9.-]{1,40}$/.test(raw.source)) ? raw.source : 'primary-cron';
     } catch (e) {
       alert(`inbox file for ${date} exists but is INVALID (${e.message}) - primary tagger output malformed`);
     }
@@ -180,7 +184,7 @@ async function processDate(date, { write, comps, compsPath, refDate }) {
     }
   }
 
-  const entry = { date, major: g.major, minor: g.minor, new: g.new, flags: ['nightly', source], oneline: '' };
+  const entry = { date, major: g.major, minor: g.minor, new: g.new, flags: ['nightly', source], oneline };
   console.log(JSON.stringify(entry));
   // Routine notice only: log it to the console, never page anyone via notify.
   const unknown = g.major.filter(m => !codebook.projects[m.slug]).map(m => m.slug);
@@ -270,7 +274,9 @@ if (mode === 'nightly') {
   // run, whether or not new days were tagged. Best-effort and fully try/caught: this can NEVER
   // throw, change the exit code, or affect tagging (which is already complete and untouched above).
   // Any stale-missing-log days collected this run are folded in as a single trailing note.
-  if (write) {
+  // TASTEBUD_NO_DIGEST=1 suppresses the send (for manual/backfill runs, so a batch of
+  // historical dates does not push a digest per invocation).
+  if (write && !process.env.TASTEBUD_NO_DIGEST) {
     try {
       const r = spawnSync('node', [ENGINE, 'digest'], { encoding: 'utf8', timeout: 60000 });
       if (r.error) console.log(`(digest send failed: ${r.error.message})`);

@@ -227,11 +227,16 @@ function computeUnknownRows() {
       if (top && top.score >= ALIAS_HINT && days_seen >= ALIAS_MIN_DAYS) {
         recommend = 'alias'; recommendTarget = top.slug;
         reason = `keeps company almost entirely with ${top.slug} (${fmt(top.score)}); reads as the same work`;
-      } else if (days_seen >= RIPE_DAYS || e.majorMass >= RIPE_MASS) {
+      } else if (days_seen >= 2 && (days_seen >= RIPE_DAYS || e.majorMass >= RIPE_MASS)) {
         recommend = 'mint';
         reason = top
           ? `recurring with real mass; closest neighbor ${top.slug} (${fmt(top.score)}) is not close enough to alias`
           : 'recurring with real mass and no co-occurring companions; looks like its own workstream';
+      } else if (days_seen === 1 && e.majorMass >= RIPE_MASS) {
+        // One heavy day is not enough evidence for a permanent slug: a sole-major single day
+        // is often a routine spike. Never recommend MINT off one day regardless of mass.
+        recommend = 'watch';
+        reason = `sole evidence is one heavy day (mass ${fmt(e.majorMass)}); could be a routine spike, watch for recurrence before minting`;
       } else {
         recommend = 'dismiss';
         reason = top
