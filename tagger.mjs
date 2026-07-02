@@ -269,6 +269,29 @@ if (mode === 'nightly') {
     } catch (e) { console.log(`(unknowns report regen failed: ${e.message})`); }
   }
 
+  // Weekly data checkpoint: codebook / compositions / ledger are the one non-regenerable artifact,
+  // so give them automatic versioned history. Best-effort git commit at the repo root (this
+  // script's directory) on local Sundays (or when TASTEBUD_CHECKPOINT=1), write-runs only. The
+  // data files are added by absolute path since the data dir may live outside the script dir.
+  // Fully try/caught and status-tolerant: git absent, not a repo, or "nothing to commit" all log
+  // ONE console line. This NEVER throws, changes the exit code, notifies, or affects tagging.
+  if (write && (new Date().getDay() === 0 || process.env.TASTEBUD_CHECKPOINT === '1')) {
+    try {
+      const stamp = new Date().toISOString().slice(0, 10);
+      const files = ['codebook.json', 'compositions.json', 'unknowns-ledger.json'].map(f => join(DATA, f));
+      const add = spawnSync('git', ['add', ...files], { cwd: SCRIPT_DIR, encoding: 'utf8', timeout: 30000 });
+      if (add.error || add.status !== 0) {
+        console.log(`(weekly data checkpoint skipped: git add ${add.error ? add.error.message : 'exit ' + add.status})`);
+      } else {
+        const commit = spawnSync('git', ['commit', '-m', `Weekly data checkpoint ${stamp}`],
+          { cwd: SCRIPT_DIR, encoding: 'utf8', timeout: 30000 });
+        if (commit.error) console.log(`(weekly data checkpoint skipped: ${commit.error.message})`);
+        else if (commit.status !== 0) console.log('weekly data checkpoint: nothing to commit (data unchanged)');
+        else console.log('weekly data checkpoint committed');
+      }
+    } catch (e) { console.log(`(weekly data checkpoint skipped: ${e.message})`); }
+  }
+
   // Nightly digest: compose via the engine's `digest` command and push through the SAME generic
   // notify mechanism the alerts use (config.notifyCommand {message} hook). Fires once per nightly
   // run, whether or not new days were tagged. Best-effort and fully try/caught: this can NEVER

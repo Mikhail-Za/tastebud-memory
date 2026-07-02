@@ -551,17 +551,23 @@ else if (cmd === 'tasteslike') {
   const cb = codebook.projects[slug];
   console.log(`${slug}${cb ? ` (${cb.class ?? 'project'})` : '  [UNKNOWN INGREDIENT - not in codebook]'}`);
   console.log('keeps company with (rarity-weighted co-occurrence):');
-  [...companions.entries()].sort((a, b) => b[1] - a[1]).slice(0, 5)
-    .forEach(([s, w]) => console.log(`  ${s.padEnd(28)} ${fmt(w / activity)}`));
-  console.log('tastes like (similar taste-profiles among known ingredients):');
   const nt = norm(target);
-  allSlugsEver
-    .filter(s => s !== slug && KNOWN.has(s))
-    .map(s => { const { p, activity: a } = profile(s); return a && norm(p) > 0 ? { slug: s, cos: dot(target, p) / (nt * norm(p)) } : null; })
-    .filter(Boolean)
-    .sort((x, y) => y.cos - x.cos)
-    .slice(0, 5)
-    .forEach(r => console.log(`  ${r.slug.padEnd(28)} cos=${fmt(r.cos)}`));
+  if (companions.size === 0 || nt === 0) {
+    // A sole-major slug shares no day with other major work, so its taste profile is zero-norm;
+    // a cosine would divide by zero (NaN). Report no profile and skip the tastes-like section.
+    console.log('  (none - this slug never shares a day with other major work, so it has no taste profile yet)');
+  } else {
+    [...companions.entries()].sort((a, b) => b[1] - a[1]).slice(0, 5)
+      .forEach(([s, w]) => console.log(`  ${s.padEnd(28)} ${fmt(w / activity)}`));
+    console.log('tastes like (similar taste-profiles among known ingredients):');
+    allSlugsEver
+      .filter(s => s !== slug && KNOWN.has(s))
+      .map(s => { const { p, activity: a } = profile(s); return a && norm(p) > 0 ? { slug: s, cos: dot(target, p) / (nt * norm(p)) } : null; })
+      .filter(Boolean)
+      .sort((x, y) => y.cos - x.cos)
+      .slice(0, 5)
+      .forEach(r => console.log(`  ${r.slug.padEnd(28)} cos=${fmt(r.cos)}`));
+  }
 }
 
 else if (cmd === 'color') {
@@ -756,6 +762,10 @@ else if (cmd === 'digest') {
   const latest = days[days.length - 1];
   const topSlug = latest && latest.major[0] ? latest.major[0].slug : '(none)';
   const latestDay = latest ? latest.date : '(none)';
+  // Latest day's oneline rides along in the pulse/footer when present (truncated to 70 chars);
+  // absent/empty oneline leaves the label as just the top slug, byte-identical to before.
+  const oneline = latest && typeof latest.oneline === 'string' ? latest.oneline : '';
+  const tagLabel = oneline ? `${topSlug}: "${oneline.slice(0, 70)}"` : topSlug;
   const slugN = KNOWN.size;
   const ymd = today();
 
@@ -788,10 +798,10 @@ else if (cmd === 'digest') {
     const f = decide[0].slug;
     out.push(`  reply: "dismiss ${f}" / "mint ${f}" / "watch ${f}" / "alias ${f} onto <someExistingCodebookSlug>"`);
     out.push('');
-    out.push(`tagged ${latestDay} (${topSlug}) | maturing ${maturingN} | ${slugN} slugs | ok`);
+    out.push(`tagged ${latestDay} (${tagLabel}) | maturing ${maturingN} | ${slugN} slugs | ok`);
     if (recent) out.push(`recently: ${recent}`);
   } else {
-    let pulse = `🎨 Tastebud - ${ymd}: tagged ${latestDay} (${topSlug}). 0 to decide.`;
+    let pulse = `🎨 Tastebud - ${ymd}: tagged ${latestDay} (${tagLabel}). 0 to decide.`;
     if (maturingN > 0) pulse += ` ${maturingN} maturing.`;
     pulse += ` ${slugN} slugs, ok.`;
     out.push(pulse);
