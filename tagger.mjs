@@ -48,12 +48,25 @@ const STALE_DAYS = Math.max(1, Number(process.env.TASTEBUD_STALE_DAYS) || 2);
 const nologDays = [];
 
 function notify(text) {
-  // Optional push to any chat/alert service: set config.notifyCommand to a shell command
-  // containing {message}, e.g. "ntfy publish my-topic \"{message}\"". Failures never break tagging.
-  if (!config.notifyCommand) return;
+  // Optional push to any chat/alert service. Preferred: config.notifyArgs, an argv array
+  // whose "{message}" element is replaced with the text and spawned WITHOUT a shell, e.g.
+  // ["ntfy", "publish", "my-topic", "{message}"]. This is the only form that delivers
+  // multi-line digests intact: a shell command line silently truncates at the first
+  // newline on Windows (exit 0, no stderr - the rest of the message just vanishes).
+  // Legacy: config.notifyCommand, a shell template containing {message}; newlines are
+  // flattened to " | " there because a shell command line cannot carry them.
+  // Failures never break tagging.
   try {
-    const cmd = config.notifyCommand.replace('{message}', text.replace(/["`$]/g, "'"));
-    const r = spawnSync(cmd, { shell: true, encoding: 'utf8', timeout: 30000 });
+    let r;
+    if (Array.isArray(config.notifyArgs) && config.notifyArgs.length) {
+      const argv = config.notifyArgs.map(a => a === '{message}' ? text : a);
+      r = spawnSync(argv[0], argv.slice(1), { encoding: 'utf8', timeout: 30000 });
+    } else if (config.notifyCommand) {
+      const safe = text.replace(/["`$]/g, "'").replace(/\r?\n/g, ' | ');
+      const cmd = config.notifyCommand.replace('{message}', safe);
+      r = spawnSync(cmd, { shell: true, encoding: 'utf8', timeout: 30000 });
+    } else return;
+    if (r.error) { console.log(`(notify failed: ${r.error.message})`); return; }
     if (r.status !== 0) console.log(`(notify failed: ${(r.stderr || r.stdout || '').slice(0, 200)})`);
   } catch (e) { console.log(`(notify failed: ${e.message})`); }
 }

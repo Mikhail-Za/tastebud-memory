@@ -6,5 +6,6 @@
     "url": "http://localhost:1234/v1/chat/completions",
     "model": "your-local-model-id"
   },
-  "notifyCommand": null
+  "notifyCommand": null,
+  "notifyArgs": null
 }

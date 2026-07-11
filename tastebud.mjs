@@ -803,8 +803,10 @@ else if (cmd === 'digest') {
 
   const out = [];
   if (decide.length > 0) {
-    out.push(`🎨 Tastebud - ${ymd}`);
-    out.push(`DECIDE (${decide.length} need your call):`);
+    // decide count on line 1: phone notification previews (and any first-line-only
+    // transport) must carry the signal, not just a bare header.
+    out.push(`🎨 Tastebud - ${ymd}: ${decide.length} need your call`);
+    out.push('DECIDE:');
     for (const r of decide) {
       out.push(`  ${r.slug.padEnd(26)} ${r.age}d  mass ${mass2(r.major_mass)}  -> ${verdict(r)}`);
     }

@@ -200,7 +200,10 @@ ingredient, so every command above demonstrates something real.
 3. **Nightly**: schedule your platform's LLM to tag yesterday into `inbox/<date>.json`
    (prompt template provided), and run `node tagger.mjs nightly --write` an hour later as the
    deterministic sweeper. If the primary fails, a local model takes over and you get an alert
-   with the reason (`notifyCommand` in config can point at Slack, ntfy, a webhook, anything).
+   with the reason. For alerts and digests, prefer `notifyArgs` in config (an argv array with a
+   `{message}` element, spawned without a shell) over the legacy `notifyCommand` shell template:
+   a shell command line silently truncates multi-line messages at the first newline on Windows,
+   so the digest's decide table never arrives. Both can point at Slack, ntfy, a webhook, anything.
    The same nightly pass logs new unknown slugs silently and auto-files any that already have a
    project file (config `projectsDir`); it does not interrupt you for either.
 4. **Weekly decision loop**: once a week run `node tastebud.mjs unknowns --write` and review only
