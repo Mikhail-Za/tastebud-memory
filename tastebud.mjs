@@ -109,6 +109,19 @@ const allSlugsEver = [...new Set([...KNOWN, ...days.flatMap(d => d.major.map(m =
 const fmt = n => n.toFixed(3);
 const byDate = Object.fromEntries(days.map(d => [d.date, d]));
 
+// provenance marker for a day's tag: surface the writer trust tier so a reader can tell a
+// supervised tag from an unattended cron or a degraded local-model fallback. Source lives
+// in the compositions `flags` array (written by tagger.mjs).
+function provTag(d) {
+  const f = Array.isArray(d.flags) ? d.flags : [];
+  if (!f.length) return '';
+  const src = f.find(x => x !== 'nightly') || f.join(',');
+  const mark = /oauth|cron/.test(src) ? '~cron'
+             : /local|fallback/.test(src) ? '!local'
+             : '*supervised';
+  return `  [${mark}: ${src}]`;
+}
+
 // every alias across the codebook. `alias`-ing a slug truly resolves its unknown (it joins
 // ALIASED) without mutating KNOWN, which other commands key on for codebook membership.
 const ALIASED = new Set();
@@ -406,7 +419,7 @@ else if (cmd === 'decode') {
   const d = byDate[args[0]];
   if (!d) { console.log('no such day'); process.exit(1); }
   const b = bundle(d);
-  console.log(`${d.date} - ${d.oneline ?? ''}`);
+  console.log(`${d.date} - ${d.oneline ?? ''}${provTag(d)}`);
   console.log('recovered from vector alone (vs actual):');
   for (const { slug, est } of decodeBundle(b, allSlugsEver)) {
     const actual = d.major.find(m => m.slug === slug);
@@ -420,7 +433,7 @@ else if (cmd === 'where') {
   const hits = days.filter(d => d.major.some(m => m.slug === slug) || d.minor.includes(slug));
   for (const d of hits) {
     const m = d.major.find(x => x.slug === slug);
-    console.log(`  ${d.date}  ${m ? 'MAJOR ' + fmt(m.w) : 'minor      '}  ${d.oneline ?? ''}`);
+    console.log(`  ${d.date}  ${m ? 'MAJOR ' + fmt(m.w) : 'minor      '}  ${d.oneline ?? ''}${provTag(d)}`);
   }
   console.log(`${hits.length} day(s); major on ${hits.filter(d => d.major.some(m => m.slug === slug)).length}`);
 }
