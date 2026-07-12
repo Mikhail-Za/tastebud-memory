@@ -5,9 +5,18 @@ high-dimensional identity vector. Every day's work becomes a weighted blend of t
 One "taste" (a dot product) decomposes any day back into its exact ingredients, enumerates
 every day a project ever touched, and detects ingredients **nobody has named yet**.
 
-Zero dependencies. Two JSON files. ~600 lines of Node.
+Zero runtime dependencies, stdlib-only Node: the query engine (`tastebud.mjs`) and the
+deterministic sweeper (`tagger.mjs`) read two JSON files and nothing else. The nightly production
+pattern *around* them (a scheduler, an LLM tagging lane, and a notify hook) is bring-your-own,
+wired in [`docs/production-pattern.md`](docs/production-pattern.md).
+
+_Current as of 2026-07-12._
 
 ## What it looks like
+
+Sample outputs below are pinned to a reference date of **2026-07-12** running against the shipped
+example data. The `open Nd` age in the triage output advances with the calendar, so it is left out
+of the samples here; everything else is stable.
 
 ```console
 $ node tastebud.mjs decode 2026-01-12        # un-mix one day from its 4096-dim vector alone
@@ -16,22 +25,31 @@ recovered from vector alone (vs actual):
   aquarium-controller          est=0.502  actual=0.500
   recipe-site                  est=0.296  actual=0.300
   garden-sensors               est=0.191  actual=0.200
+  minors (table): home-lab
 
 $ node tastebud.mjs gaps                     # what's been worked on but never documented?
 workstreams in logs with NO project file:
   aquarium-controller            4 day(s)  mass=2.150  first=2026-01-10
   home-lab                       3 day(s)  mass=1.550  first=2026-01-05
   sourdough-lab                  2 day(s)  mass=0.900  first=2026-01-15  [NOT EVEN IN CODEBOOK]
+  garden-sensors                 1 day(s)  mass=0.200  first=2026-01-12
 
 $ node tastebud.mjs tasteslike sourdough-lab # the unknown ingredient: what is it close to?
 sourdough-lab  [UNKNOWN INGREDIENT - not in codebook]
 keeps company with (rarity-weighted co-occurrence):
   recipe-site                  0.463
   aquarium-controller          0.201
+  novel-draft                  0.173
+tastes like (similar taste-profiles among known ingredients):
+  budget-tracker               cos=0.903
+  garden-sensors               cos=0.804
+  aquarium-controller          cos=0.356
+  job-search                   cos=0.337
+  home-lab                     cos=0.139
 
 $ node tastebud.mjs unknowns                 # triage: which unknowns are RIPE to decide on?
 unknowns: 1 total  (decide 1, maturing 0)
-  sourdough-lab                open 155d   2 day(s)  mass=0.900  [OVERDUE  ]  -> alias->recipe-site
+  sourdough-lab                2 day(s)  mass=0.900  [OVERDUE  ]  -> alias->recipe-site
 ```
 
 Those last two are the headline feature. `sourdough-lab` doesn't exist anywhere as a project:
@@ -130,22 +148,26 @@ it a real project, so there is nothing to ask. Logged, not pinged.
 
 **Weekly digest decides only ripe items.** Once a week a review surfaces *only* the ripe unknowns,
 each with a recommendation (**mint** / **alias** / **dismiss** / **watch**) plus the context behind
-it, pushed through the config `notifyCommand`. Everything still maturing stays out of your way.
+it, pushed through your config notify hook. Everything still maturing stays out of your way.
 
-**Every decision is reversible.** Triage state lives in a persistent ledger
-(`<dataDir>/unknowns-ledger.json`). Nothing you decide is permanent:
+**Every decision is walkable-back.** Triage state lives in a persistent ledger
+(`<dataDir>/unknowns-ledger.json`), separate from your composition history, so a wrong call never
+corrupts ground truth:
 
 - **dismiss** means "not now," not "never." A dismissed one-off *revives* if it starts growing
   again, and comes back recommended as something to watch.
-- **mint** writes the slug into the codebook, and is fully undoable with `mint --undo`.
-- **watch** parks it on a watchlist: out of the decide queue, still in view.
+- **mint** writes the slug into the codebook, and is undoable with `mint --undo` (undo only removes
+  a slug this tool minted, so it can never delete a founding or hand-added project).
+- **watch** parks it on a watchlist: out of the decide queue, still in view. A watched item can
+  later be minted, aliased, or dismissed.
 - **alias** folds a name into an existing project and resolves it. The engine treats codebook
-  aliases as known, so the unknown leaves the list for good (until you remove the alias).
+  aliases as known, so the unknown leaves the list until you remove the alias. Undoing an alias is
+  a manual codebook edit today, not a one-command reverse.
 
 ```console
 $ node tastebud.mjs unknowns                 # what is ripe to decide on right now?
 unknowns: 1 total  (decide 1, maturing 0)
-  sourdough-lab                open 155d   2 day(s)  mass=0.900  [OVERDUE  ]  -> alias->recipe-site
+  sourdough-lab                2 day(s)  mass=0.900  [OVERDUE  ]  -> alias->recipe-site
 
 $ node tastebud.mjs alias sourdough-lab recipe-site   # fold it in; it now resolves
 $ node tastebud.mjs watch sourdough-lab "keep an eye on it"   # or defer the call
@@ -160,6 +182,12 @@ can always take it back.
 
 ## Quickstart (60 seconds)
 
+**Prerequisites:** Node 18+ (uses ESM and global fetch); Git - or download the ZIP. Nothing else
+to install. Every config key and environment variable is documented in
+[`docs/configuration.md`](docs/configuration.md); the shipped config runs this quickstart as-is.
+
+With Git:
+
 ```bash
 git clone https://github.com/Mikhail-Za/tastebud-memory && cd tastebud-memory
 node tastebud.mjs check                      # validate the sample data
@@ -172,6 +200,19 @@ node tastebud.mjs unknowns                   # the triage queue: which unknowns 
 node tastebud.mjs color 2026-01-12           # the original metaphor, as garnish
 ```
 
+No Git? Download and extract the ZIP, then run the same commands:
+
+```bash
+# any OS with curl + unzip:
+curl -L -o tastebud-memory.zip https://github.com/Mikhail-Za/tastebud-memory/archive/refs/heads/main.zip
+unzip tastebud-memory.zip && cd tastebud-memory-main
+node tastebud.mjs check                      # then the rest of the commands above, verbatim
+```
+
+On Windows without curl/unzip, download
+<https://github.com/Mikhail-Za/tastebud-memory/archive/refs/heads/main.zip> in a browser,
+right-click - Extract All, then `cd` into `tastebud-memory-main` and run the same commands.
+
 The unknown-ingredient loop adds its own small command set (all reversible, all snapshot before
 they write):
 
@@ -183,7 +224,7 @@ node tastebud.mjs mint sourdough-lab --undo  # reverse a mint
 node tastebud.mjs dismiss sourdough-lab "one-off"   # "not now"; revives if it grows again
 node tastebud.mjs watch sourdough-lab        # park on the watchlist, out of the decide queue
 node tastebud.mjs decisions                  # the persistent decision ledger, grouped by status
-node tastebud.mjs digest                     # the daily report: ripe decide queue + recent decisions (push via notifyCommand)
+node tastebud.mjs digest                     # the daily report: ripe decide queue + recent decisions (push via your notify hook)
 node tastebud.mjs autofile                   # dry-run filing unknowns that already have a project file
 ```
 
@@ -199,11 +240,13 @@ ingredient, so every command above demonstrates something real.
    `docs/methodology.md` for the gate/backtest protocol we used.
 3. **Nightly**: schedule your platform's LLM to tag yesterday into `inbox/<date>.json`
    (prompt template provided), and run `node tagger.mjs nightly --write` an hour later as the
-   deterministic sweeper. If the primary fails, a local model takes over and you get an alert
-   with the reason. For alerts and digests, prefer `notifyArgs` in config (an argv array with a
-   `{message}` element, spawned without a shell) over the legacy `notifyCommand` shell template:
-   a shell command line silently truncates multi-line messages at the first newline on Windows,
-   so the digest's decide table never arrives. Both can point at Slack, ntfy, a webhook, anything.
+   deterministic sweeper. The local-model fallback is **off by default** (`localModel: null`): if
+   the primary fails and no local model is configured, the day is left untagged with a one-line
+   note. Set `localModel` (see [`docs/configuration.md`](docs/configuration.md)) to an
+   OpenAI-compatible endpoint to enable the fallback lane, and you get an alert with the reason
+   whenever it fires. For alerts and digests, prefer `notifyArgs` in config (an argv array with a
+   `{message}` element, spawned without a shell) over the legacy `notifyCommand` shell template.
+   Both can point at Slack, ntfy, a webhook, anything.
    The same nightly pass logs new unknown slugs silently and auto-files any that already have a
    project file (config `projectsDir`); it does not interrupt you for either.
 4. **Weekly decision loop**: once a week run `node tastebud.mjs unknowns --write` and review only
@@ -212,6 +255,25 @@ ingredient, so every command above demonstrates something real.
    [`docs/production-pattern.md`](docs/production-pattern.md) for the wiring.
 5. **Agent integration**: register `mcp-server/server.mjs` (standard MCP, stdio) so your agent
    can *taste before reading*: decode a day in milliseconds, then fetch only the logs that matter.
+
+## A note on the notify hook (it runs a command you configure)
+
+The alert/digest transport executes a command *you* put in the config, and the text it carries
+(the digest, alert lines) is **derived from your own logs**. So be deliberate about which form you
+use:
+
+- **`notifyArgs` (recommended).** An argv array spawned WITHOUT a shell; the `"{message}"` element
+  is replaced with the message as a single argument. No shell means no metacharacter interpretation
+  and the multi-line digest arrives intact. This is the only recommended form.
+- **`notifyCommand` (legacy, deprecated).** A shell command line with `{message}`. It has two named
+  hazards: on Windows a shell command line silently truncates a multi-line message at the first
+  newline (exit 0, no error, so the digest's decide table just vanishes), and because the message
+  is log-derived text spliced into a shell command line, shell metacharacters in it run through a
+  shell. Only `"`, `` ` ``, and `$` are stripped and newlines flattened to `" | "` - a mitigation,
+  not a guarantee. Kept only for existing setups; use `notifyArgs` instead.
+
+Nothing runs unless you set one of these (both default to `null`). Full details and examples are in
+[`docs/configuration.md`](docs/configuration.md).
 
 ## What this is not
 
