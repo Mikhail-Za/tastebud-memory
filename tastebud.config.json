@@ -2,10 +2,7 @@
   "dataDir": "./examples",
   "logDirs": ["./examples/logs"],
   "dimensions": 4096,
-  "localModel": {
-    "url": "http://localhost:1234/v1/chat/completions",
-    "model": "your-local-model-id"
-  },
+  "localModel": null,
   "notifyCommand": null,
   "notifyArgs": null
 }

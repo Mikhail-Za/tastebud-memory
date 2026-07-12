@@ -33,16 +33,19 @@
 import { readFileSync, writeFileSync, copyFileSync, existsSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { loadConfig, validateConfig, loadData } from './validate.mjs';
+
+// Runtime floor: this engine uses ESM + global fetch (Node 18+). Fail fast with one line
+// rather than a confusing "fetch is not defined" deeper in.
+const NODE_MAJOR = parseInt(process.versions.node, 10);
+if (NODE_MAJOR < 18) {
+  console.error(`tastebud requires Node 18+ (uses ESM and global fetch); you have ${process.versions.node}.`);
+  process.exit(1);
+}
 
 const SCRIPT_DIR = dirname(fileURLToPath(import.meta.url));
-function loadConfig() {
-  for (const dir of [process.cwd(), SCRIPT_DIR]) {
-    const p = join(dir, 'tastebud.config.json');
-    if (existsSync(p)) return { ...JSON.parse(readFileSync(p, 'utf8')), _configDir: dir };
-  }
-  throw new Error('tastebud.config.json not found (looked in cwd and script dir)');
-}
-const config = loadConfig();
+const config = loadConfig(SCRIPT_DIR);
+validateConfig(config, config._configDir);
 const DATA = resolve(config._configDir, config.dataDir ?? './examples');
 const D = config.dimensions ?? 4096;
 
@@ -74,8 +77,7 @@ const dot = (a, b) => { let s = 0; for (let i = 0; i < D; i++) s += a[i] * b[i];
 const norm = a => Math.sqrt(dot(a, a));
 
 // ---------- data ----------
-const codebook = JSON.parse(readFileSync(join(DATA, 'codebook.json'), 'utf8'));
-const comps = JSON.parse(readFileSync(join(DATA, 'compositions.json'), 'utf8'));
+const { codebook, comps } = loadData(DATA);
 const KNOWN = new Set(Object.keys(codebook.projects));
 
 // normalize at load: dedupe minors that are also major, renormalize weights to 1.0
@@ -369,6 +371,10 @@ function mintSlug({ slug, parent = null, aliases = [], klass = 'product', undo =
   if (!SLUG_RE.test(slug)) return { ok: false, error: `bad slug "${slug}": must be kebab-case (^[a-z0-9]+(-[a-z0-9]+)*$)` };
   if (undo) {
     if (!KNOWN.has(slug)) return { ok: false, error: `nothing to undo: "${slug}" is not a codebook key` };
+    // Only slugs THIS tool minted may be undone. A founding/hand-added slug has no "minted"
+    // ledger status, so undo refuses it and can never delete a project you added by hand.
+    const st = loadLedger().entries[slug]?.status;
+    if (st !== 'minted') return { ok: false, error: `refusing to undo "${slug}": ledger status is "${st ?? 'none'}", not "minted" (undo only removes tool-minted slugs; founding/hand-added slugs are protected)` };
   } else {
     if (KNOWN.has(slug)) return { ok: false, error: `"${slug}" already exists in the codebook (renames are never done; add an alias instead)` };
     if (parent !== null && !KNOWN.has(parent)) return { ok: false, error: `bad parent "${parent}": not an existing codebook key` };
@@ -413,6 +419,8 @@ if (cmd === 'check') {
   console.log(`days=${days.length} slugs=${KNOWN.size} D=${D}`);
   console.log(`vector-recovery sanity (${t.date}): ${ok ? 'PASS' : 'FAIL'}`);
   console.log(issues ? `${issues} data issue(s) (normalized at load)` : 'no data issues');
+  // Non-zero exit on any data issue or a failed vector-recovery so `check` is CI/script usable.
+  if (issues || !ok) process.exitCode = 1;
 }
 
 else if (cmd === 'decode') {
@@ -498,6 +506,11 @@ else if (cmd === 'backtest') {
   let firstFlag = null, flagged = 0;
   for (const d of days) {
     if (!d.major.length) continue;
+    // Count only TARGET-ACTIVE days toward detection/lag. A day whose only unexplained mass is
+    // some OTHER unknown slug (e.g. sourdough-lab) is not an aquarium-controller detection; it
+    // would flag no matter which slug we backtested. Restricting to days the target is actually
+    // major on stops that misattribution.
+    if (!d.major.some(m => m.slug === slug)) continue;
     const unexplained = d.major.filter(m => excluded.has(m.slug) || !KNOWN.has(m.slug)).reduce((s, m) => s + m.w, 0);
     const b = bundle(d);
     const r = Float64Array.from(b);

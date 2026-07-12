@@ -18,20 +18,25 @@ import { readFileSync, writeFileSync, appendFileSync, existsSync, unlinkSync, co
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
+import { loadConfig, validateConfig, loadData } from './validate.mjs';
+
+// Runtime floor: this sweeper uses ESM + global fetch (Node 18+). Fail fast with one line.
+const NODE_MAJOR = parseInt(process.versions.node, 10);
+if (NODE_MAJOR < 18) {
+  console.error(`tastebud requires Node 18+ (uses ESM and global fetch); you have ${process.versions.node}.`);
+  process.exit(1);
+}
 
 const SCRIPT_DIR = dirname(fileURLToPath(import.meta.url));
-function loadConfig() {
-  for (const dir of [process.cwd(), SCRIPT_DIR]) {
-    const p = join(dir, 'tastebud.config.json');
-    if (existsSync(p)) return { ...JSON.parse(readFileSync(p, 'utf8')), _configDir: dir };
-  }
-  throw new Error('tastebud.config.json not found');
-}
-const config = loadConfig();
+const config = loadConfig(SCRIPT_DIR);
+validateConfig(config, config._configDir);
 const DATA = resolve(config._configDir, config.dataDir ?? './examples');
 const LOG_DIRS = (config.logDirs ?? []).map(d => resolve(config._configDir, d));
 const INBOX = join(DATA, 'inbox');
 const LOCAL = config.localModel ?? {};
+// Local fallback lane is OFF unless a localModel with a url is configured. When off, the sweeper
+// never calls out; a day the primary failed to tag is left untagged with a one-line console note.
+const HAS_LOCAL = !!(config.localModel && config.localModel.url);
 // Sibling engine, resolved next to this script (not the cwd), so the auto-file and
 // report-regeneration hooks work regardless of where the sweep is launched from.
 const ENGINE = join(SCRIPT_DIR, 'tastebud.mjs');
@@ -81,7 +86,7 @@ function alert(msg) {
   notify('👅 Tastebud alert: ' + msg);
 }
 
-const codebook = JSON.parse(readFileSync(join(DATA, 'codebook.json'), 'utf8'));
+const { codebook } = loadData(DATA);
 const slugLines = Object.entries(codebook.projects)
   .map(([s, p]) => `${s}${p.aliases?.length ? ' (=' + p.aliases.slice(0, 4).join(', ') + ')' : ''}`)
   .join('; ');
@@ -187,6 +192,12 @@ async function processDate(date, { write, comps, compsPath, refDate }) {
   }
 
   if (!g) {
+    if (!HAS_LOCAL) {
+      // Fallback lane disabled (localModel is null): skip it with a clear one-liner instead of
+      // attempting a call that would only throw. The primary-failure alert already fired above.
+      console.log(`no local fallback configured (localModel is null) - ${date} left untagged; set localModel in tastebud.config.json to enable the fallback lane`);
+      return false;
+    }
     try {
       g = await localTag(date);
       source = 'local-fallback';
