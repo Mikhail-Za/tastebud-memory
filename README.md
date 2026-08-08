@@ -146,6 +146,13 @@ are env-tunable (`TASTEBUD_RIPE_DAYS`, `TASTEBUD_RIPE_MASS`, `TASTEBUD_RIPE_AGE_
 the nightly sweeper files it into the codebook automatically. A file means a human already judged
 it a real project, so there is nothing to ask. Logged, not pinged.
 
+> Trust boundary, stated plainly: this reference implementation treats *file existence* as the
+> proxy for human judgment, so a stray or machine-created `<slug>.md` will auto-mint. That is fine
+> for a single-user setup where you control the project directory. If files can appear without a
+> human decision, prefer a review-gated flow: keep proposals in a separate candidates directory and
+> require an explicit `promote` step (re-validating the evidence) before anything enters the
+> permanent codebook. Slugs are permanent, so an accidental mint is only reversible via `--undo`.
+
 **Weekly digest decides only ripe items.** Once a week a review surfaces *only* the ripe unknowns,
 each with a recommendation (**mint** / **alias** / **dismiss** / **watch**) plus the context behind
 it, pushed through your config notify hook. Everything still maturing stays out of your way.
