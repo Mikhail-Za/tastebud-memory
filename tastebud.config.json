@@ -1,6 +1,8 @@
 {
   "dataDir": "./examples",
   "logDirs": ["./examples/logs"],
+  "candidatesDir": "./examples/project-candidates",
+  "projectsDir": "./examples/projects",
   "dimensions": 4096,
   "localModel": null,
   "notifyCommand": null,

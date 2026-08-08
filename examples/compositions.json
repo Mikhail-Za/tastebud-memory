@@ -15,6 +15,8 @@
 {"date":"2026-01-15","major":[{"slug":"sourdough-lab","w":0.6},{"slug":"recipe-site","w":0.4}],"minor":[],"new":["sourdough-lab"],"flags":[],"oneline":"Starter hydration experiments; recipe-site fermentation section"},
 {"date":"2026-01-16","major":[{"slug":"k8s-migration","w":0.5},{"slug":"home-lab","w":0.5}],"minor":[],"new":[],"flags":[],"oneline":"Postgres operator migrated; NAS firmware update"},
 {"date":"2026-01-17","major":[{"slug":"job-search","w":1.0}],"minor":[],"new":[],"flags":["personal-day"],"oneline":"Phone screen plus take-home exercise"},
-{"date":"2026-01-18","major":[{"slug":"aquarium-controller","w":0.4},{"slug":"sourdough-lab","w":0.3},{"slug":"novel-draft","w":0.3}],"minor":["recipe-site"],"new":["sourdough-lab"],"flags":[],"oneline":"Probe calibration; second starter batch; chapter 8 outline"}
+{"date":"2026-01-18","major":[{"slug":"aquarium-controller","w":0.4},{"slug":"sourdough-lab","w":0.3},{"slug":"novel-draft","w":0.3}],"minor":["recipe-site"],"new":["sourdough-lab"],"flags":[],"oneline":"Probe calibration; second starter batch; chapter 8 outline"},
+{"date":"2026-01-19","major":[{"slug":"weather-station","w":1.0}],"minor":[],"new":["weather-station"],"flags":[],"oneline":"Weather station: sensor enclosure and anemometer wiring"},
+{"date":"2026-01-20","major":[{"slug":"weather-station","w":1.0}],"minor":[],"new":["weather-station"],"flags":[],"oneline":"Weather station: firmware logging loop and dashboard"}
   ]
 }
