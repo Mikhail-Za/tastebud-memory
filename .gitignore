@@ -3,6 +3,12 @@ examples/inbox/
 examples/unknowns-report.md
 examples/unknowns-ledger.json
 *.bak
+**/*.bak
 nightly.log
 tmp-*
 node_modules/
+.tastebud.lock
+*.tmp
+**/candidate-events.jsonl
+**/autopromote.json
+.sanitize-denylist.local
