@@ -37,7 +37,7 @@ const LOCAL = config.localModel ?? {};
 // Local fallback lane is OFF unless a localModel with a url is configured. When off, the sweeper
 // never calls out; a day the primary failed to tag is left untagged with a one-line console note.
 const HAS_LOCAL = !!(config.localModel && config.localModel.url);
-// Sibling engine, resolved next to this script (not the cwd), so the auto-file and
+// Sibling engine, resolved next to this script (not the cwd), so the candidate-sweep and
 // report-regeneration hooks work regardless of where the sweep is launched from.
 const ENGINE = join(SCRIPT_DIR, 'tastebud.mjs');
 
@@ -60,7 +60,8 @@ function notify(text) {
   // newline on Windows (exit 0, no stderr - the rest of the message just vanishes).
   // Legacy: config.notifyCommand, a shell template containing {message}; newlines are
   // flattened to " | " there because a shell command line cannot carry them.
-  // Failures never break tagging.
+  // Failures never break tagging. Returns {ok, id?}: exit 0 is the reference ack the sweeper uses to
+  // decide whether to stamp mark-sent. An unconfigured transport is NOT an ack (nothing was sent).
   try {
     let r;
     if (Array.isArray(config.notifyArgs) && config.notifyArgs.length) {
@@ -70,15 +71,16 @@ function notify(text) {
       const safe = text.replace(/["`$]/g, "'").replace(/\r?\n/g, ' | ');
       const cmd = config.notifyCommand.replace('{message}', safe);
       r = spawnSync(cmd, { shell: true, encoding: 'utf8', timeout: 30000 });
-    } else return;
-    if (r.error) { console.log(`(notify failed: ${r.error.message})`); return; }
-    if (r.status !== 0) console.log(`(notify failed: ${(r.stderr || r.stdout || '').slice(0, 200)})`);
-  } catch (e) { console.log(`(notify failed: ${e.message})`); }
+    } else return { ok: false, reason: 'no-transport' };
+    if (r.error) { console.log(`(notify failed: ${r.error.message})`); return { ok: false }; }
+    if (r.status !== 0) { console.log(`(notify failed: ${(r.stderr || r.stdout || '').slice(0, 200)})`); return { ok: false }; }
+    return { ok: true };
+  } catch (e) { console.log(`(notify failed: ${e.message})`); return { ok: false }; }
 }
 
 function alert(msg) {
   // A genuine FAILURE worth a human's attention: logged to alerts.log AND pushed via notify.
-  // Routine, non-failure notices (unknown ingredient seen, auto-filed a slug) must use
+  // Routine, non-failure notices (unknown ingredient seen, candidate promoted) must use
   // console.log directly instead, so they never page anyone.
   const line = `[${new Date().toISOString()}] ${msg}`;
   try { appendFileSync(join(DATA, 'alerts.log'), line + '\n'); } catch {}
@@ -255,28 +257,21 @@ if (mode === 'nightly') {
     await processDate(date, { write, comps, compsPath, refDate });
 
   // All date processing is complete; tagging will not be touched past this point.
-  // Best-effort auto-file: mint open unknowns that ALREADY qualify so the codebook
-  // absorbs them before the report below is regenerated. Runs only on a real write run.
-  // Any failure (non-zero status, thrown error, or timeout) is logged to the CONSOLE
-  // ONLY and must never throw out of here and never change the exit code. The AUTOFILED:
-  // contract line is reported to the console only - it never pages anyone via notify.
+  // Candidate sweep: the WHOLE candidate enumeration runs under one lock in the engine. Ordinary
+  // gate failures are DATA (the engine exits 0 and prints per-candidate lines to the console); a
+  // NON-ZERO exit is an ENGINE failure, which is a genuine alert AND suppresses the "all good"
+  // digest claim below. This replaces the retired file-existence auto-file step. Write-runs only.
+  let sweepEngineFailed = false;
   if (write) {
     try {
-      const r = spawnSync('node', [ENGINE, 'autofile', '--write'], { encoding: 'utf8', timeout: 60000 });
-      if (r.error) console.log(`(autofile failed: ${r.error.message})`);
-      else if (r.status !== 0) console.log(`(autofile failed: exit ${r.status} ${(r.stderr || r.stdout || '').slice(0, 200)})`);
+      const r = spawnSync('node', [ENGINE, 'sweep-candidates', '--write'], { encoding: 'utf8', timeout: 120000 });
+      if (r.error) { sweepEngineFailed = true; alert(`candidate sweep engine error: ${r.error.message} - candidates left for the next sweep`); }
+      else if (r.status !== 0) { sweepEngineFailed = true; alert(`candidate sweep FAILED (exit ${r.status}): ${(r.stderr || r.stdout || '').slice(0, 200)} - investigate before trusting tonight's status`); }
       else {
-        const out = String(r.stdout || '');
-        let filed = null;
-        for (const m of out.matchAll(/^AUTOFILED:\s*(.+?)\s*$/gm)) filed = m[1].trim();
-        if (filed && filed !== 'none') {
-          const slugs = filed.split(/\s+/).filter(Boolean);
-          if (slugs.length)
-            console.log(`auto-filed ${slugs.length} project(s) to the codebook: ${slugs.join(' ')} - undo any with: node tastebud.mjs mint <slug> --undo`);
-        }
-        console.log(`autofile complete (${filed && filed !== 'none' ? filed : 'none'})`);
+        const out = String(r.stdout || '').trim();
+        if (out) console.log(out);   // per-candidate promoted/rejected/shadow lines: console only, no page
       }
-    } catch (e) { console.log(`(autofile failed: ${e.message})`); }
+    } catch (e) { sweepEngineFailed = true; alert(`candidate sweep threw: ${e.message}`); }
   }
 
   // All date processing is complete; tagging will not be touched past this point.
@@ -323,7 +318,7 @@ if (mode === 'nightly') {
   // Any stale-missing-log days collected this run are folded in as a single trailing note.
   // TASTEBUD_NO_DIGEST=1 suppresses the send (for manual/backfill runs, so a batch of
   // historical dates does not push a digest per invocation).
-  if (write && !process.env.TASTEBUD_NO_DIGEST) {
+  if (write && !process.env.TASTEBUD_NO_DIGEST && !sweepEngineFailed) {
     try {
       const r = spawnSync('node', [ENGINE, 'digest'], { encoding: 'utf8', timeout: 60000 });
       if (r.error) console.log(`(digest send failed: ${r.error.message})`);
@@ -332,8 +327,25 @@ if (mode === 'nightly') {
         let text = String(r.stdout || '').trim();
         if (text) {
           if (nologDays.length) text += `\n(no log: ${nologDays.join(', ')})`;
-          notify(text);
-          console.log('sent nightly digest');
+          const ack = notify(text);
+          if (ack && ack.ok) {
+            console.log('sent nightly digest');
+            // After a CONFIRMED notify only, stamp mark-sent for the ripe decide slugs. The machine
+            // interface is `digest --json`; the human digest text is NEVER parsed.
+            try {
+              const j = spawnSync('node', [ENGINE, 'digest', '--json'], { encoding: 'utf8', timeout: 60000 });
+              if (!j.error && j.status === 0) {
+                let decide = [];
+                try { decide = JSON.parse(String(j.stdout || '').trim()).decide || []; } catch {}
+                if (decide.length) {
+                  const ms = spawnSync('node', [ENGINE, 'mark-sent', ...decide], { encoding: 'utf8', timeout: 60000 });
+                  if (ms.error || ms.status !== 0) console.log(`(mark-sent failed: ${ms.error ? ms.error.message : 'exit ' + ms.status})`);
+                }
+              } else console.log(`(digest --json failed: ${j.error ? j.error.message : 'exit ' + j.status})`);
+            } catch (e) { console.log(`(mark-sent step failed: ${e.message})`); }
+          } else {
+            console.log(`(digest not acked${ack && ack.reason ? ': ' + ack.reason : ''} - mark-sent skipped)`);
+          }
         } else console.log('(digest send skipped: empty digest output)');
       }
     } catch (e) { console.log(`(digest send failed: ${e.message})`); }
