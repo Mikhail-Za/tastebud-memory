@@ -21,10 +21,12 @@ import { join } from 'node:path';
 const ROOT = execFileSync('git', ['rev-parse', '--show-toplevel'], { encoding: 'utf8' }).trim();
 const git = args => execFileSync('git', args, { cwd: ROOT, encoding: 'utf8' }).split('\n').filter(Boolean);
 
+// Only PLAN-PORT.md is intentionally excluded (the git-excluded plan doc). Everything else the
+// manifest returns is scanned: git already omits ignored paths, so a file that becomes TRACKED can
+// never slip past a hard-coded directory carve-out.
 const EXCLUDE_EXACT = new Set(['PLAN-PORT.md']);
-const EXCLUDE_PREFIX = ['.git/', 'review-20260808/'];
 const manifest = [...new Set([...git(['ls-files']), ...git(['ls-files', '--others', '--exclude-standard'])])]
-  .filter(f => !EXCLUDE_EXACT.has(f) && !EXCLUDE_PREFIX.some(p => f.startsWith(p)));
+  .filter(f => !EXCLUDE_EXACT.has(f) && !f.startsWith('.git/'));
 
 // Private-slug denylist (git-ignored, owner-provided). Absent => FAIL CLOSED.
 const DENY_FILE = '.sanitize-denylist.local';
@@ -52,7 +54,10 @@ const NAME_ALLOW = new Set([
 const offenders = [];
 for (const f of manifest) {
   let text;
-  try { text = readFileSync(join(ROOT, f), 'utf8'); } catch { continue; }
+  // An unreadable manifest file means we cannot certify it: that is a BLOCKING failure, never a
+  // silent skip that could let an incomplete scan report CLEAN.
+  try { text = readFileSync(join(ROOT, f), 'utf8'); }
+  catch (e) { offenders.push(`${f}: UNREADABLE (${e.code || e.message}) - cannot certify, refusing to pass`); continue; }
   text.split('\n').forEach((line, i) => {
     const lc = line.toLowerCase();
     for (const term of badTerms) if (term && lc.includes(term)) offenders.push(`${f}:${i + 1}: forbidden term "${term}"`);

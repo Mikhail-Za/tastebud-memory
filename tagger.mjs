@@ -18,7 +18,7 @@ import { readFileSync, writeFileSync, appendFileSync, existsSync, unlinkSync, co
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
-import { loadConfig, validateConfig, loadData } from './validate.mjs';
+import { loadConfig, validateConfig, loadData, resolveLog } from './validate.mjs';
 
 // Runtime floor: this sweeper uses ESM + global fetch (Node 18+). Fail fast with one line.
 const NODE_MAJOR = parseInt(process.versions.node, 10);
@@ -104,12 +104,11 @@ RULES:
 Respond with ONLY this JSON, no markdown fences, no commentary:
 {"major":[{"slug":"x","w":0.6}],"minor":["y"],"new":[]}`;
 
+// One canonical resolver, shared with the candidate evidence gate (g7): first-match by dir order,
+// and a date present in two log dirs is ambiguous (resolves to null here, fails g7 there).
 function findLog(date) {
-  for (const dir of LOG_DIRS) {
-    const p = join(dir, date + '.md');
-    if (existsSync(p)) return p;
-  }
-  return null;
+  const r = resolveLog(LOG_DIRS, date);
+  return r.ok ? r.path : null;
 }
 
 function normalize(parsed) {

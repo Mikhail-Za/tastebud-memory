@@ -52,6 +52,16 @@ export function validateConfig(config, configDir) {
   }
 }
 
+// THE canonical date -> log resolver, shared by the tagger and the candidate evidence gate (g7) so
+// both resolve a `<date>.md` identically. First-match by dir order, but two dirs both holding the
+// same date is ambiguous and fails (we refuse to guess which log is authoritative).
+export function resolveLog(logDirs, date) {
+  const hits = logDirs.filter(dir => existsSync(join(dir, date + '.md')));
+  if (hits.length === 0) return { ok: false, reason: 'no-log' };
+  if (hits.length > 1) return { ok: false, reason: 'ambiguous' };
+  return { ok: true, path: join(hits[0], date + '.md') };
+}
+
 // Absolute log dirs, canonicalized (symlinks resolved) and deduped by canonical path, in config
 // order. Shared by the tagger's date resolver and the candidate evidence gate so both search the
 // exact same set. Assumes validateConfig already proved each dir exists.

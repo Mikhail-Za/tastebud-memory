@@ -31,6 +31,13 @@ function sleep(ms) {
   try { Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms); } catch {}
 }
 
+// writeSync may make a SHORT write (return fewer bytes than requested); loop until the whole buffer
+// is on the fd. Every fd write in this module goes through here so a partial write never truncates.
+export function writeFully(fd, buf) {
+  let off = 0;
+  while (off < buf.length) off += writeSync(fd, buf, off, buf.length - off);
+}
+
 function pidAlive(pid) {
   if (!Number.isInteger(pid) || pid <= 0) return false;
   try { process.kill(pid, 0); return true; }
@@ -65,22 +72,30 @@ export function acquire(dataDir) {
   const token = randomBytes(16).toString('hex');
   const deadline = Date.now() + 30000; // 30s bounded acquire
   for (;;) {
-    let fd;
+    let fd, created = false;
     try {
       fd = openSync(lp, 'wx');
-      writeSync(fd, JSON.stringify({ pid: process.pid, startTime: Date.now(), token }));
+      created = true;
+      writeFully(fd, Buffer.from(JSON.stringify({ pid: process.pid, startTime: Date.now(), token })));
       fsyncSync(fd);
       closeSync(fd);
+      fd = undefined;
       held.set(lp, { count: 1, token });
       cleanOrphanTmps(dataDir);
       return;
     } catch (e) {
       if (fd !== undefined) { try { closeSync(fd); } catch {} }
-      if (e.code !== 'EEXIST') throw e;
-      if (tryReap(lp)) continue;              // stale holder gone: retry immediately
-      if (Date.now() > deadline)
-        throw new Error(`tastebud: could not acquire ${basename(lp)} within 30s (another run holds it)`);
-      sleep(250);
+      if (e.code === 'EEXIST') {
+        if (tryReap(lp)) continue;            // stale holder gone: retry immediately
+        if (Date.now() > deadline)
+          throw new Error(`tastebud: could not acquire ${basename(lp)} within 30s (another run holds it)`);
+        sleep(250);
+        continue;
+      }
+      // Setup failed AFTER we created the lock (write/fsync error): remove our half-written lock so
+      // it is not a permanent, unreapable orphan (it records no valid pid), then surface the error.
+      if (created) { try { unlinkSync(lp); } catch {} }
+      throw e;
     }
   }
 }
@@ -113,7 +128,7 @@ export function writeAtomic(path, data) {
   let fd;
   try {
     fd = openSync(tmp, 'wx');
-    writeSync(fd, data);
+    writeFully(fd, Buffer.isBuffer(data) ? data : Buffer.from(data));
     fsyncSync(fd);
     closeSync(fd);
     fd = undefined;

@@ -33,15 +33,15 @@
 import {
   readFileSync, writeFileSync, copyFileSync, existsSync, appendFileSync,
   lstatSync, realpathSync, readdirSync, unlinkSync, symlinkSync,
-  openSync, writeSync, fsyncSync, closeSync, mkdtempSync, mkdirSync, rmSync,
+  openSync, fsyncSync, closeSync, mkdtempSync, mkdirSync, rmSync,
 } from 'node:fs';
 import { dirname, join, resolve, basename } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { tmpdir } from 'node:os';
 import { createHash } from 'node:crypto';
 import { spawnSync, spawn } from 'node:child_process';
-import { loadConfig, validateConfig, loadData, validateCandidateDirs, resolveLogDirs, companionMax } from './validate.mjs';
-import { withLock, writeAtomic } from './lock.mjs';
+import { loadConfig, validateConfig, loadData, validateCandidateDirs, resolveLogDirs, resolveLog, companionMax } from './validate.mjs';
+import { withLock, writeAtomic, writeFully } from './lock.mjs';
 
 // Runtime floor: this engine uses ESM + global fetch (Node 18+). Fail fast with one line
 // rather than a confusing "fetch is not defined" deeper in.
@@ -473,6 +473,10 @@ function killpoint(tag) { if (KILL_AFTER === tag) process.exit(137); }
 // exercised (distinct from killpoint, which hard-exits). Inert unless TASTEBUD_FAIL_AFTER is set.
 const FAIL_AFTER = process.env.TASTEBUD_FAIL_AFTER || '';
 function failpoint(tag) { if (FAIL_AFTER === tag) throw new Error(`injected failure after ${tag}`); }
+// Corruption hook (selftest only): tamper the just-written file at a named sub-step so the sha
+// verification that guards the commit is exercised. Inert unless TASTEBUD_CORRUPT_AFTER is set.
+const CORRUPT_AFTER = process.env.TASTEBUD_CORRUPT_AFTER || '';
+function corruptpoint(tag, path) { if (CORRUPT_AFTER === tag) appendFileSync(path, 'X'); }
 
 // ---- candidate-events.jsonl (advisory, sanitized, dedup on the payload minus ts) ----
 function appendEvent(ev) {
@@ -546,15 +550,6 @@ function isRealDate(s) {
   return dt.getUTCFullYear() === y && dt.getUTCMonth() === mo - 1 && dt.getUTCDate() === d; // component round-trip
 }
 const normLine = s => s.replace(/\s+/g, ' ').trim().normalize('NFC');
-
-// Resolve <date>.md across logDirs: first-match by dir order, but TWO dirs both holding the date is
-// ambiguous and fails (we refuse to guess which log is authoritative).
-function resolveLog(logDirs, date) {
-  const hits = logDirs.filter(dir => existsSync(join(dir, date + '.md')));
-  if (hits.length === 0) return { ok: false, reason: 'no-log' };
-  if (hits.length > 1) return { ok: false, reason: 'ambiguous' };
-  return { ok: true, path: join(hits[0], date + '.md') };
-}
 
 // validateCandidate: the nine gates. g1 first (parse + schema); if it fails, return ONLY g1 because
 // the later gates need its parsed meta. Otherwise evaluate g2..g9 and collect every failure.
@@ -670,9 +665,15 @@ function promoteViaCandidate({ slug, candidatesDir, projectsDir, logDirs, unatte
       // 4b. CODEBOOK new entry, has_file:true set EXPLICITLY
       mintApply(cb, { slug, parent: v.meta.data.parent, aliases: [], klass: v.meta.data.class, has_file: true });
       saveCodebookAtomic(cb); killpoint('4b'); failpoint('4b');
-      // 4c. project file, exclusive no-clobber (cross-volume-safe: fresh write, no rename)
+      // 4c. project file, exclusive no-clobber (cross-volume-safe: fresh write, no rename). Write
+      // ALL bytes (writeSync can short-write), fsync, close in finally, then VERIFY the on-disk sha
+      // equals promote_sha before we destroy the candidate: a truncated/partial write must never be
+      // committed as a valid project file.
       const fd = openSync(projPath, 'wx'); destCreated = true;
-      writeSync(fd, bytes); fsyncSync(fd); closeSync(fd); killpoint('4c'); failpoint('4c');
+      try { writeFully(fd, bytes); fsyncSync(fd); } finally { closeSync(fd); }
+      corruptpoint('4c', projPath);
+      if (sha256(readFileSync(projPath)) !== sha) throw new Error('project file write verification failed (on-disk sha != promote_sha)');
+      killpoint('4c'); failpoint('4c');
       // 4d. COMMIT POINT: candidate path identity + bytes unchanged since the snapshot, then unlink
       const st2 = lstatSync(candPath);
       if (!st2.isFile() || dirname(realpathSync(candPath)) !== realpathSync(candidatesDir) || sha256(readFileSync(candPath)) !== sha)
@@ -720,7 +721,19 @@ function undoPromotedMint({ slug, candidatesDir, projectsDir }) {
       if (existsSync(candPath)) return { ok: false, error: `refusing to undo "${slug}": a candidate file already exists at ${basename(candPath)}` };
       if (!existsSync(projPath)) return { ok: false, error: `RECOVERY-REQUIRED: project file for "${slug}" is missing; cannot reconstruct the candidate. Run "node tastebud.mjs check".` };
       const bytes = readFileSync(projPath);
-      const fd = openSync(candPath, 'wx'); writeSync(fd, bytes); fsyncSync(fd); closeSync(fd);   // (a)
+      const projSha = sha256(bytes);
+      // The project file IS the promoted candidate bytes; verify against promote_sha BEFORE
+      // reconstructing anything, so a corrupted or edited project file never silently round-trips.
+      if (prev.promote_sha && projSha !== prev.promote_sha)
+        return { ok: false, error: `RECOVERY-REQUIRED: project file for "${slug}" does not match its promote_sha; refusing to reconstruct a candidate from unverified bytes. Run "node tastebud.mjs check".` };
+      // (a) reconstruct the candidate: write ALL bytes, fsync, close, then verify the candidate we
+      // wrote before we remove the project file (the only remaining copy).
+      const fd = openSync(candPath, 'wx');
+      try { writeFully(fd, bytes); fsyncSync(fd); } finally { closeSync(fd); }
+      if (sha256(readFileSync(candPath)) !== projSha) {
+        try { unlinkSync(candPath); } catch {}   // clean abort: nothing else changed yet
+        return { ok: false, error: `RECOVERY-REQUIRED: candidate reconstruction for "${slug}" failed verification; no changes made. Run "node tastebud.mjs check".` };
+      }
       unlinkSync(projPath);                                                                        // (b)
       delete cb.projects[slug]; saveCodebookAtomic(cb);                                            // (c)
       const led2 = { ...ledger, entries: { ...ledger.entries, [slug]: buildLedgerEntry(prev, 'undone', { decided_on: today() }) } };
@@ -933,6 +946,24 @@ async function runSelftestCandidates() {
     const led = readLed(env).entries['rbk'];
     assert(!led || led.status !== 'minted', 'ledger marker not cleared');
     assert(run(env, ['check']).status === 0, 'check should be clean after rollback');
+  });
+  await t('project write sha-verify catches corruption -> rollback', async () => {
+    const env = promoEnv('corrupt');
+    const r = run(env, ['promote', 'corrupt'], { TASTEBUD_CORRUPT_AFTER: '4c' });
+    assert(r.status !== 0, 'promote should fail when the written project sha mismatches');
+    assert(!readCb(env).projects['corrupt'], 'codebook not rolled back');
+    assert(existsSync(join(env.cDir, 'corrupt.md')), 'candidate should remain (never unlinked)');
+    assert(!existsSync(join(env.pDir, 'corrupt.md')), 'corrupted project file should be removed by rollback');
+    assert(run(env, ['check']).status === 0, 'check should be clean after rollback');
+  });
+  await t('undo refuses a project file that mismatches promote_sha', async () => {
+    const env = promoEnv('undoguard');
+    assert(run(env, ['promote', 'undoguard']).status === 0, 'promote failed');
+    appendFileSync(join(env.pDir, 'undoguard.md'), 'tampered');   // corrupt the promoted project file
+    const u = run(env, ['mint', 'undoguard', '--undo']);
+    assert(u.status === 1, 'undo should refuse to reconstruct from a tampered project file');
+    assert(!existsSync(join(env.cDir, 'undoguard.md')), 'no candidate should be left behind by the refused undo');
+    assert(readCb(env).projects['undoguard'], 'codebook entry should survive a refused undo');
   });
 
   // ---- shadow vs autopromote ----
@@ -1656,11 +1687,11 @@ else if (cmd === 'sweep-candidates') {
   const write = process.argv.includes('--write');
   const { candidatesDir, projectsDir } = validateCandidateDirs(config, config._configDir);
   const logDirs = resolveLogDirs(config, config._configDir);
-  const names = readdirSync(candidatesDir).filter(n => n.endsWith('.md') && SLUG_RE.test(n.slice(0, -3))).sort();
 
   if (!write) {
     const led = loadLedger();
     const max = companionMax();
+    const names = readdirSync(candidatesDir).filter(n => n.endsWith('.md') && SLUG_RE.test(n.slice(0, -3))).sort();
     for (const n of names) {
       const slug = n.slice(0, -3);
       const v = validateCandidate({ slug, candidatesDir, projectsDir, logDirs, codebook, ledger: led, days, companionMax: max, bytes: null });
@@ -1671,9 +1702,13 @@ else if (cmd === 'sweep-candidates') {
   }
 
   try {
-    const auto = readAutopromote().enabled;
-    let promoted = 0, rejected = 0, blocked = 0;
+    let promoted = 0, rejected = 0, blocked = 0, count = 0;
+    // The WHOLE enumeration (directory listing, autopromote state, and every per-candidate action)
+    // runs inside ONE lock so the critical section is not read before it is held.
     withLock(DATA, () => {
+      const auto = readAutopromote().enabled;
+      const names = readdirSync(candidatesDir).filter(n => n.endsWith('.md') && SLUG_RE.test(n.slice(0, -3))).sort();
+      count = names.length;
       for (const n of names) {
         const slug = n.slice(0, -3);
         const { codebook: cb, ledger, days: d } = loadFresh();
@@ -1698,7 +1733,7 @@ else if (cmd === 'sweep-candidates') {
         }
       }
     });
-    console.log(`sweep-candidates: ${names.length} candidate(s); promoted ${promoted}, rejected ${rejected}, held ${blocked}`);
+    console.log(`sweep-candidates: ${count} candidate(s); promoted ${promoted}, rejected ${rejected}, held ${blocked}`);
     process.exit(0);
   } catch (e) {
     console.error(`sweep-candidates ENGINE FAILURE: ${e.message}`);
