@@ -35,7 +35,11 @@ function sleep(ms) {
 // is on the fd. Every fd write in this module goes through here so a partial write never truncates.
 export function writeFully(fd, buf) {
   let off = 0;
-  while (off < buf.length) off += writeSync(fd, buf, off, buf.length - off);
+  while (off < buf.length) {
+    const n = writeSync(fd, buf, off, buf.length - off);
+    if (n <= 0) throw new Error('writeSync made no progress (0 bytes)'); // never spin forever
+    off += n;
+  }
 }
 
 function pidAlive(pid) {

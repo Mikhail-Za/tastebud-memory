@@ -724,8 +724,10 @@ function undoPromotedMint({ slug, candidatesDir, projectsDir }) {
       const projSha = sha256(bytes);
       // The project file IS the promoted candidate bytes; verify against promote_sha BEFORE
       // reconstructing anything, so a corrupted or edited project file never silently round-trips.
-      if (prev.promote_sha && projSha !== prev.promote_sha)
-        return { ok: false, error: `RECOVERY-REQUIRED: project file for "${slug}" does not match its promote_sha; refusing to reconstruct a candidate from unverified bytes. Run "node tastebud.mjs check".` };
+      // A via:promote entry MUST carry a valid recovery hash; a missing/malformed one is itself a
+      // corruption that must not bypass verification (r-diff #3).
+      if (!/^[0-9a-f]{64}$/.test(prev.promote_sha || '') || projSha !== prev.promote_sha)
+        return { ok: false, error: `RECOVERY-REQUIRED: project file for "${slug}" does not match a valid promote_sha; refusing to reconstruct a candidate from unverified bytes. Run "node tastebud.mjs check".` };
       // (a) reconstruct the candidate: write ALL bytes, fsync, close, then verify the candidate we
       // wrote before we remove the project file (the only remaining copy).
       const fd = openSync(candPath, 'wx');

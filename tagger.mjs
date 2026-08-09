@@ -18,7 +18,7 @@ import { readFileSync, writeFileSync, appendFileSync, existsSync, unlinkSync, co
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
-import { loadConfig, validateConfig, loadData, resolveLog } from './validate.mjs';
+import { loadConfig, validateConfig, loadData, resolveLog, resolveLogDirs } from './validate.mjs';
 
 // Runtime floor: this sweeper uses ESM + global fetch (Node 18+). Fail fast with one line.
 const NODE_MAJOR = parseInt(process.versions.node, 10);
@@ -31,7 +31,7 @@ const SCRIPT_DIR = dirname(fileURLToPath(import.meta.url));
 const config = loadConfig(SCRIPT_DIR);
 validateConfig(config, config._configDir);
 const DATA = resolve(config._configDir, config.dataDir ?? './examples');
-const LOG_DIRS = (config.logDirs ?? []).map(d => resolve(config._configDir, d));
+const LOG_DIRS = resolveLogDirs(config, config._configDir);   // canonical + deduped, same as g7
 const INBOX = join(DATA, 'inbox');
 const LOCAL = config.localModel ?? {};
 // Local fallback lane is OFF unless a localModel with a url is configured. When off, the sweeper
