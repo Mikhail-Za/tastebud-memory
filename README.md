@@ -10,13 +10,12 @@ deterministic sweeper (`tagger.mjs`) read two JSON files and nothing else. The n
 pattern *around* them (a scheduler, an LLM tagging lane, and a notify hook) is bring-your-own,
 wired in [`docs/production-pattern.md`](docs/production-pattern.md).
 
-_Current as of 2026-07-12._
+_Current as of 2026-08-08._
 
 ## What it looks like
 
-Sample outputs below are pinned to a reference date of **2026-07-12** running against the shipped
-example data. The `open Nd` age in the triage output advances with the calendar, so it is left out
-of the samples here; everything else is stable.
+Sample outputs below run against the shipped example data. The `open Nd` age in the triage output
+advances with the calendar, so it is left out of the samples here; everything else is stable.
 
 ```console
 $ node tastebud.mjs decode 2026-01-12        # un-mix one day from its 4096-dim vector alone
@@ -30,6 +29,7 @@ recovered from vector alone (vs actual):
 $ node tastebud.mjs gaps                     # what's been worked on but never documented?
 workstreams in logs with NO project file:
   aquarium-controller            4 day(s)  mass=2.150  first=2026-01-10
+  weather-station                2 day(s)  mass=2.000  first=2026-01-19  [NOT EVEN IN CODEBOOK]
   home-lab                       3 day(s)  mass=1.550  first=2026-01-05
   sourdough-lab                  2 day(s)  mass=0.900  first=2026-01-15  [NOT EVEN IN CODEBOOK]
   garden-sensors                 1 day(s)  mass=0.200  first=2026-01-12
@@ -37,28 +37,30 @@ workstreams in logs with NO project file:
 $ node tastebud.mjs tasteslike sourdough-lab # the unknown ingredient: what is it close to?
 sourdough-lab  [UNKNOWN INGREDIENT - not in codebook]
 keeps company with (rarity-weighted co-occurrence):
-  recipe-site                  0.463
-  aquarium-controller          0.201
-  novel-draft                  0.173
+  recipe-site                  0.492
+  aquarium-controller          0.215
+  novel-draft                  0.185
 tastes like (similar taste-profiles among known ingredients):
   budget-tracker               cos=0.903
   garden-sensors               cos=0.804
-  aquarium-controller          cos=0.356
+  aquarium-controller          cos=0.358
   job-search                   cos=0.337
-  home-lab                     cos=0.139
+  home-lab                     cos=0.140
 
 $ node tastebud.mjs unknowns                 # triage: which unknowns are RIPE to decide on?
-unknowns: 1 total  (decide 1, maturing 0)
+unknowns: 2 total  (decide 2, maturing 0)
+  weather-station              2 day(s)  mass=2.000  [OVERDUE  ]  -> mint
   sourdough-lab                2 day(s)  mass=0.900  [OVERDUE  ]  -> alias->recipe-site
 ```
 
-Those last two are the headline feature. `sourdough-lab` doesn't exist anywhere as a project:
-the nightly tagger *invented* the slug because nothing in the codebook fit, and the system
-flagged it and placed it next to its nearest relative. Your agent notices new workstreams
-forming **before you've named them** and then helps you decide what to do about each one. The
-`-> alias->recipe-site` is a *recommendation*, not a decision: `sourdough-lab` keeps company
-almost entirely with `recipe-site`, so the system reads it as the same work and suggests folding
-it in. You stay in charge: you could mint it as its own project instead, dismiss it, or wait.
+Those last two are the headline feature. Neither `sourdough-lab` nor `weather-station` exists as a
+project: the nightly tagger *invented* each slug because nothing in the codebook fit, and the system
+flagged them and placed each next to its nearest relatives. The two recommendations differ because
+the *evidence* differs. `sourdough-lab` keeps company almost entirely with `recipe-site`, so the
+system reads it as the same work and suggests **aliasing** it in. `weather-station` is two solid days
+of standalone work that shares no company with anything known, so it reads as **its own project** and
+is recommended to **mint**. Both are *recommendations*, not decisions: you stay in charge, and you
+promote a slug into the codebook through an explicit, evidence-checked gate (below), never silently.
 
 ## The pipeline
 
@@ -73,8 +75,26 @@ fingerprint (4096-dim)
      │
      ├─ decode / where / first / cooccur / window / diff / gaps   (exact membership queries)
      ├─ similar / drift / tasteslike / backtest                   (vector-layer extras)
-     ├─ unknowns / mint / alias / dismiss / watch / autofile      (ripen-then-decide triage loop)
+     ├─ unknowns / mint / alias / dismiss / watch                 (ripen-then-decide triage loop)
+     ├─ candidate draft → sweep-candidates → promote (9 gates)    (evidence-gated codebook writes)
      └─ MCP server → your agent tastes before it reads
+```
+
+The candidate flow is the one recommended way a new slug enters the permanent codebook:
+
+```
+unknown ripens (unknowns/digest says "would mint")
+     │  you (or your agent) draft a candidate file: project-candidates/<slug>.md
+     │  frontmatter: slug/class/status + >=2 evidence entries (date + exact quoted log line)
+     ▼
+sweep-candidates            validates every candidate against nine deterministic gates
+     │  autopromote OFF (default) → "shadow": passing candidates wait for a human `promote`
+     │  autopromote ON  → the product-class, no-parent, all-gates-pass ones self-mint (logged)
+     ▼
+promote <slug>              one atomic, crash-recoverable transaction under a lock:
+     │  ledger marker (via:promote) → codebook entry (has_file:true) → project file → drop candidate
+     ▼
+codebook slug (permanent)   fully reversible: `mint <slug> --undo` runs the reverse transaction
 ```
 
 ## The idea (and where it came from)
@@ -142,16 +162,19 @@ quietly in a **Maturing** bucket and never nag. A workstream that shows up for o
 vanishes was noise; a workstream that keeps coming back has earned a question. All the thresholds
 are env-tunable (`TASTEBUD_RIPE_DAYS`, `TASTEBUD_RIPE_MASS`, `TASTEBUD_RIPE_AGE_DAYS`, and more).
 
-**Auto-file the obvious.** If an unknown already has a project file on disk (config `projectsDir`),
-the nightly sweeper files it into the codebook automatically. A file means a human already judged
-it a real project, so there is nothing to ask. Logged, not pinged.
+**Promote through an evidence gate (the recommended path).** When an unknown is ripe, a slug enters
+the permanent codebook exactly one way: you draft a small candidate file and `promote` it. Promotion
+re-checks nine deterministic gates (schema, path safety, not-already-known, evidence that quotes real
+log lines, companion independence, destination free, and more), then runs one atomic,
+crash-recoverable transaction. Nothing is minted on a hunch or on the mere existence of a file. The
+full grammar, the nine gates, and the CLI are in [`CANDIDATES.md`](CANDIDATES.md).
 
-> Trust boundary, stated plainly: this reference implementation treats *file existence* as the
-> proxy for human judgment, so a stray or machine-created `<slug>.md` will auto-mint. That is fine
-> for a single-user setup where you control the project directory. If files can appear without a
-> human decision, prefer a review-gated flow: keep proposals in a separate candidates directory and
-> require an explicit `promote` step (re-validating the evidence) before anything enters the
-> permanent codebook. Slugs are permanent, so an accidental mint is only reversible via `--undo`.
+> **Deprecated: file-existence auto-file.** Earlier versions auto-minted any unknown that already had
+> a `<slug>.md` on disk, treating *file existence* as a proxy for human judgment. That trusts a stray
+> or machine-created file too much. The `autofile` command still exists (it prints a deprecation
+> notice to stderr and keeps its old output contract) but is **no longer part of the nightly sweep**;
+> use the candidate `promote` flow instead. Slugs are permanent, so any mint is reversible only via
+> `mint <slug> --undo`.
 
 **Weekly digest decides only ripe items.** Once a week a review surfaces *only* the ripe unknowns,
 each with a recommendation (**mint** / **alias** / **dismiss** / **watch**) plus the context behind
@@ -173,19 +196,22 @@ corrupts ground truth:
 
 ```console
 $ node tastebud.mjs unknowns                 # what is ripe to decide on right now?
-unknowns: 1 total  (decide 1, maturing 0)
+unknowns: 2 total  (decide 2, maturing 0)
+  weather-station              2 day(s)  mass=2.000  [OVERDUE  ]  -> mint
   sourdough-lab                2 day(s)  mass=0.900  [OVERDUE  ]  -> alias->recipe-site
 
-$ node tastebud.mjs alias sourdough-lab recipe-site   # fold it in; it now resolves
-$ node tastebud.mjs watch sourdough-lab "keep an eye on it"   # or defer the call
-$ node tastebud.mjs mint sourdough-lab --class product        # or make it its own project
-$ node tastebud.mjs mint sourdough-lab --undo                 # changed your mind: undo it
+$ node tastebud.mjs alias sourdough-lab recipe-site   # fold the alias-like one in; it now resolves
+$ node tastebud.mjs sweep-candidates                  # dry-run the nine gates over every candidate
+$ node tastebud.mjs promote weather-station           # mint the mint-like one through the gate
+$ node tastebud.mjs mint weather-station --undo        # changed your mind: reverse the promotion
 ```
 
-The recommendation is a hint, never a decision. Here `sourdough-lab` co-occurs almost entirely
-with `recipe-site`, so the system suggests aliasing it; a human who knows it is a distinct effort
-can mint it instead. The point of the loop is that you make the call, late enough to be sure, and
-can always take it back.
+The recommendation is a hint, never a decision. `sourdough-lab` co-occurs almost entirely with
+`recipe-site`, so the system suggests aliasing it. `weather-station` stands on its own, so it is
+recommended to mint, and minting happens through the candidate gate: a drafted
+`project-candidates/weather-station.md` whose evidence quotes real log lines, promoted in one atomic
+transaction. The point of the loop is that you make the call, late enough to be sure, on real
+evidence, and can always take it back.
 
 ## Quickstart (60 seconds)
 
@@ -226,17 +252,25 @@ they write):
 ```bash
 node tastebud.mjs unknowns --write           # write unknowns-report.md (Decide / Watching / Maturing)
 node tastebud.mjs alias sourdough-lab recipe-site   # fold a name into a project; it now resolves
-node tastebud.mjs mint sourdough-lab --class product  # promote an unknown to its own codebook slug
-node tastebud.mjs mint sourdough-lab --undo  # reverse a mint
 node tastebud.mjs dismiss sourdough-lab "one-off"   # "not now"; revives if it grows again
 node tastebud.mjs watch sourdough-lab        # park on the watchlist, out of the decide queue
 node tastebud.mjs decisions                  # the persistent decision ledger, grouped by status
-node tastebud.mjs digest                     # the daily report: ripe decide queue + recent decisions (push via your notify hook)
-node tastebud.mjs autofile                   # dry-run filing unknowns that already have a project file
+node tastebud.mjs digest                     # the daily report: ripe decide queue + candidate lines (push via your notify hook)
 ```
 
-The sample data is a fictional fortnight that includes an emerging project and an unknown
-ingredient, so every command above demonstrates something real.
+And the candidate flow (the recommended way to add a slug), demonstrated on the shipped example
+candidate `examples/project-candidates/weather-station.md`:
+
+```bash
+node tastebud.mjs sweep-candidates           # dry-run: validate every candidate against the nine gates
+node tastebud.mjs promote weather-station    # mint the example candidate through the gate (atomic)
+node tastebud.mjs check                      # reconciles the committed promotion; still exit 0
+node tastebud.mjs mint weather-station --undo # reverse it: candidate restored, codebook + file rolled back
+```
+
+The sample data is a fictional fortnight with two emerging unknowns: `sourdough-lab` (reads as an
+alias of `recipe-site`) and `weather-station` (reads as its own project and passes all nine
+candidate gates), so every command above demonstrates something real.
 
 ## Using it on your own memory
 
@@ -254,12 +288,15 @@ ingredient, so every command above demonstrates something real.
    whenever it fires. For alerts and digests, prefer `notifyArgs` in config (an argv array with a
    `{message}` element, spawned without a shell) over the legacy `notifyCommand` shell template.
    Both can point at Slack, ntfy, a webhook, anything.
-   The same nightly pass logs new unknown slugs silently and auto-files any that already have a
-   project file (config `projectsDir`); it does not interrupt you for either.
-4. **Weekly decision loop**: once a week run `node tastebud.mjs unknowns --write` and review only
-   the ripe unknowns, each with a recommendation. Decide with `mint` / `alias` / `dismiss` /
-   `watch`; every call is reversible and snapshots before it writes. See
-   [`docs/production-pattern.md`](docs/production-pattern.md) for the wiring.
+   The same nightly pass logs new unknown slugs silently and runs `sweep-candidates` over your
+   candidate directory (validate, and self-mint only if you opted into `autopromote`); it does not
+   interrupt you for either.
+4. **Weekly decision loop**: once a week review the ripe unknowns (`unknowns --write`, each with a
+   recommendation) and the candidate lines in the digest. Resolve alias-like ones with `alias`,
+   defer with `watch`, drop with `dismiss`, and mint the real ones by drafting a candidate and
+   running `promote` (nine gates, atomic, reversible with `mint --undo`). See
+   [`CANDIDATES.md`](CANDIDATES.md) for the candidate grammar and gates, and
+   [`docs/production-pattern.md`](docs/production-pattern.md) for the nightly wiring.
 5. **Agent integration**: register `mcp-server/server.mjs` (standard MCP, stdio) so your agent
    can *taste before reading*: decode a day in milliseconds, then fetch only the logs that matter.
 

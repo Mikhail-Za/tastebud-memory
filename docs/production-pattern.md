@@ -14,11 +14,17 @@ Windows; everything here translates to cron/systemd/launchd + any agent platform
        └─ inbox present+valid → ingest deterministically (provenance: primary-cron), clean inbox
        └─ inbox missing/invalid → ALERT with reason → LOCAL fallback model tags → second ALERT
        └─ new unknown major slugs → LOG silently to the triage queue (no ping; they ripen first)
-       └─ unknown that already has a project file → AUTO-FILE into the codebook (logged, not pinged)
        └─ snapshots compositions.json → .bak BEFORE every append (refuses to append if that fails)
-       └─ regenerates <dataDir>/unknowns-report.md, then composes a DAILY DIGEST (the ripe decide
-          queue + recommendations, or a one-line pulse; recent decisions; no-log days folded in)
-          and sends it via notifyCommand: one consolidated push per run
+       Then, in this fixed order (each step best-effort, none can corrupt the tag above):
+       └─ sweep-candidates --write → validate every candidate under one lock; autopromote the
+          unattended-safe passers if you opted in; a NON-ZERO exit is an engine ALERT and
+          suppresses the "all good" digest (ordinary gate failures are console-only data)
+       └─ regenerate <dataDir>/unknowns-report.md
+       └─ weekly data checkpoint (Sundays / TASTEBUD_CHECKPOINT=1): git-commit codebook +
+          compositions + unknowns-ledger only
+       └─ compose + send the DAILY DIGEST (ripe decide queue + candidate lines, or a one-line pulse;
+          recent decisions; no-log days folded in) via notify; on a confirmed ack it calls
+          `digest --json` and `mark-sent` for the ripe slugs. One consolidated push per run.
 
 Sun  WEEKLY ROLLUP - optional, plain cron. A light strategic summary only: week-over-week shift,
        any item left undecided all week, workstreams still unfiled. The DAILY digest above owns
@@ -40,11 +46,14 @@ Sun  WEEKLY ROLLUP - optional, plain cron. A light strategic summary only: week-
   only appears in the digest once it has matured. Routine no-log days fold into the digest as one
   line instead of re-firing nightly. The digest is a short pulse when nothing needs you and expands
   to the ripe decide queue when it does. Have a periodic job re-send alerts whose push failed.
-- **Auto-file the unambiguous unknowns.** If an unknown slug already has a project file on disk
-  (config `projectsDir`) and has shown up as major work, a human already decided it is a real
-  project; asking again is busywork. The nightly pass files it into the codebook automatically
-  (`autofile`, snapshot first), logs it, and does not ping. This keeps the weekly digest focused
-  on genuinely undecided items.
+- **Mint through the candidate gate, not on file existence.** A slug is permanent, so it enters the
+  codebook only through a drafted candidate that `promote` re-validates against nine gates (schema,
+  path safety, not-already-known, evidence quoting real log lines, companion independence,
+  destination free, class/parent). Unattended self-minting is opt-in (`autopromote on`) and even then
+  only for the product-class, no-parent, all-gates-pass drafts; everything else waits for a human
+  `promote`. The earlier "auto-file any unknown that already has a `<slug>.md`" shortcut trusted a
+  stray file too much and has been retired from the nightly sweep. See
+  [`../CANDIDATES.md`](../CANDIDATES.md).
 - **Test the fallback before you need it.** Point the primary at a dead URL once and watch the
   whole chain fire: alert, local tag, second alert. Five minutes now, certainty forever.
 - **Validate the local lane against your primary's tags** (`tagger.mjs test <dates>`) before
@@ -82,7 +91,28 @@ digest stays high-signal.
   point: a human who knows the work can always overrule it.
 - **Every decision is reversible, on a persistent ledger.** Verdicts live in
   `<dataDir>/unknowns-ledger.json`, separate from the composition store, so triage never risks
-  ground truth. `dismiss` is "not now" and *revives* an item if it later grows; `mint` is an
-  undoable codebook write (`mint --undo`); `watch` defers; `alias` folds a name onto an existing
-  project and resolves it. Every mutating command snapshots to `.bak` first. The principle: no
-  triage action is a one-way door, so a wrong call at 0.74 confidence costs one line to undo.
+  ground truth. `dismiss` is "not now" and *revives* an item if it later grows; `watch` defers;
+  `alias` folds a name onto an existing project and resolves it; a candidate `promote` is an
+  undoable codebook write (`mint --undo` runs the reverse transaction). Every mutating command holds
+  the advisory lock and writes atomically. The principle: no triage action is a one-way door.
+
+## Drafting candidates (bring your own)
+
+The engine never invents the candidate file for you; drafting is your side of the contract, exactly
+like tagging. When an unknown ripens ("would mint" in the digest), produce
+`candidatesDir/<slug>.md` in the grammar from [`../CANDIDATES.md`](../CANDIDATES.md): the class, a
+`status: candidate` line, and at least two `date` + `quote` evidence entries where each quote is an
+**exact full line** copied from that day's log. Your agent can draft this the same way it tags: read
+the ripe slug's days, pull two representative log lines, emit the file. Keeping the drafting surface
+this small (a file with quoted evidence) is what lets `promote` re-verify it deterministically. A bad
+or fabricated quote simply fails gate g7 and never mints.
+
+## Reconciliation after a crash
+
+`promote` is one atomic transaction with a durable `via:promote` ledger marker, so an interrupted
+run is always recoverable. `node tastebud.mjs check` reconciles every `via:promote` entry against
+the codebook, the project file (by sha), and the candidate directory, and prints an
+`INCOMPLETE-PROMOTION` line with the exact artifact and a one-line repair for any deviation. Wire
+`check` into the same nightly cron (or a monitor) so a rare interrupted promotion surfaces the next
+morning instead of silently. Founding or hand-added codebook keys have no ledger entry and are never
+flagged.
