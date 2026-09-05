@@ -1,3 +1,7 @@
+# Version 2 evaluation contract
+
+Exact composition queries are the default; vector recovery is experimental. Bounded co-occurrence drives candidate gates and identity suggestions. Evaluate cited correctness, omitted critical constraints, stale answers, handoff completion, latency and context size against frozen development and holdout questions. Composition recovery tests measure stored table membership, not semantic tagging quality. See [the operating guide](operating-guide.md).
+
 # Methodology: how to prove this works on YOUR memory before trusting it
 
 Tastebud was not shipped on vibes. It had to pass a sequence of kill-gates against a real

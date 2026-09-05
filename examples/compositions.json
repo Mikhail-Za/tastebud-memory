@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "notes": "SAMPLE compositions - two fictional weeks. Each entry is one day's weighted project blend, produced by an LLM tagger reading that day's log. 'new' lists slugs the tagger invented because nothing in the codebook fit (the unknown-ingredient path). Loader normalizes weights and dedupes minors.",
+  "notes": "SAMPLE compositions - two fictional weeks. Each entry is one day's weighted project blend, produced by an LLM tagger reading that day's log. 'new' lists slugs the tagger invented because nothing in the codebook fit (the unknown-ingredient path). Raw input is validated before use; invalid weights and duplicate slugs are rejected.",
   "days": [
 {"date":"2026-01-05","major":[{"slug":"home-lab","w":0.6},{"slug":"k8s-migration","w":0.4}],"minor":["photo-archive"],"new":[],"flags":[],"oneline":"Proxmox upgrade; started k8s migration plan"},
 {"date":"2026-01-06","major":[{"slug":"k8s-migration","w":1.0}],"minor":[],"new":[],"flags":[],"oneline":"k8s migration: moved ingress and cert-manager"},

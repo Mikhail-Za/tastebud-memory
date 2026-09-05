@@ -69,7 +69,7 @@ first; if it fails, only `g1` is reported (the later gates need its parsed resul
 | g3 | not-known | The slug is not already a codebook key and not any existing alias. |
 | g4 | ledger-open | The slug's ledger status is absent or `open` (a `dismissed` / `watching` / `aliased` / `minted` / `undone` entry blocks it). |
 | g5 | ripe-mint | On fresh state the slug is a current unknown that is ripe and whose recommendation is `mint`. |
-| g6 | companion guard | No known codebook slug is a companion of this one at or above `TASTEBUD_CANDIDATE_COMPANION_MAX` (default 0.30). A slug that rides almost entirely with one known project reads as an alias, not a new project. |
+| g6 | companion guard | No known codebook slug is a companion of this one at or above `TASTEBUD_CANDIDATE_COMPANION_MAX` (default 0.30). The score is a bounded weighted co-occurrence share, independent of unrelated corpus growth; it is a review signal, not identity proof. |
 | g7 | evidence | Every evidence quote, whitespace-normalized, equals a full line of that date's log (resolved over `logDirs`), is at least 12 non-space characters, and there are >=2 distinct dates. |
 | g8 | destination-absent | `projectsDir/<slug>.md` does not already exist. |
 | g9 | class/parent | `class` is valid and `parent`, if present, is an existing codebook key. |
@@ -109,7 +109,7 @@ Under a lock, on fresh reads, `promote` commits in a fixed order so any crash is
 1. Snapshot the candidate bytes + sha256 and run the gates.
 2. Capture the pre-transaction bytes (or absence) of `codebook.json` and `unknowns-ledger.json`.
 3. Re-read the candidate; abort if its sha changed.
-4. Commit: (a) write the ledger `minted` entry with `via:promote` and the `promote_sha` (the durable
+4. Retain immutable candidate bytes in `promotion-artifacts/<sha>.md` before removing the candidate. Commit: (a) write the ledger `minted` entry with `via:promote` and the `promote_sha` (the durable
    in-progress marker), (b) write the codebook entry with `has_file:true`, (c) exclusively create the
    project file and fsync it, (d) at the commit point re-verify the candidate's identity and bytes,
    then delete it. After (d) the promotion is committed.
@@ -126,7 +126,7 @@ mint undoes in place with no file touched.
 
 `node tastebud.mjs check` reconciles every `via:promote` ledger entry (and nothing else, so
 founding or hand-added codebook keys are never treated as corruption). A promotion is complete when
-the codebook key is present, `projectsDir/<slug>.md` exists with sha256 equal to `promote_sha`, and
+the codebook key is present, `projectsDir/<slug>.md` exists, immutable `promotion-artifacts/<promote_sha>.md` matches `promote_sha`, and
 the candidate is gone. Any deviation prints:
 
 ```
@@ -152,3 +152,7 @@ recent-activity line and an audit trail only.
 (it still prints its `AUTOFILED:` line and honors its exit codes) but prints a deprecation notice to
 stderr and is no longer part of the nightly sweep. Prefer the candidate flow, which re-checks the
 evidence instead of trusting a bare file.
+
+## Evolving a promoted project
+
+After promotion, the project document may change normally. The immutable promotion artifact retains the founding evidence. A reverse operation refuses to delete a document whose bytes have changed; review a deliberate revision/revert instead. The event and revision store is described in [the operating guide](docs/operating-guide.md).

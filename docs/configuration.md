@@ -1,117 +1,59 @@
-# Configuration reference
+# Configuration
 
-Everything lives in `tastebud.config.json` (looked for in the current directory first, then next
-to the scripts). All relative paths in it resolve against the config file's own directory, so the
-tools work no matter where you launch them from. Runtime behavior is tuned further with a handful
-of `TASTEBUD_*` environment variables.
+Configuration is read from `TASTEBUD_CONFIG`, otherwise from `tastebud.config.json` in the working directory or beside the engine. Relative paths resolve against the configuration directory.
 
-The shipped config is enough to run the quickstart as-is; every key below has a sane default.
-
-## Config keys (`tastebud.config.json`)
-
-| Key | Type | Default | What it does |
-|-----|------|---------|--------------|
-| `dataDir` | string | `"./examples"` | Directory holding `codebook.json`, `compositions.json`, `unknowns-ledger.json`, `inbox/`, `alerts.log`, and the candidate runtime artifacts `candidate-events.jsonl` and `autopromote.json`. The advisory lock `.tastebud.lock` is created beside this directory. |
-| `logDirs` | string[] | `[]` | Directories the sweeper (and the candidate evidence gate) search for `<date>.md` daily logs, first-match by order. Each listed entry must be an existing directory; paths are canonicalized and deduped. |
-| `dimensions` | integer (>= 64) | `4096` | Hypervector width. Fixed for a corpus: the slug string plus this number seed each vector, so changing it re-seeds everything. |
-| `candidatesDir` | string | `<dataDir>/project-candidates` | Directory of `<slug>.md` candidate drafts read by `promote` / `sweep-candidates`. Validated (exists and is a directory) only when a candidate command runs. |
-| `projectsDir` | string | (unset) | Directory of `<slug>.md` project files. The `promote` destination, and what `has_file` detection and the destination-free gate look at. Required for candidate commands; when unset the legacy `has_file`/`gaps` paths are simply inert. Validated lazily, like `candidatesDir`. |
-| `localModel` | object or `null` | `null` | The OpenAI-compatible fallback tagger. `null` disables the fallback lane entirely (see below). |
-| `notifyArgs` | string[] or `null` | `null` | **Recommended** alert/digest transport. An argv array spawned WITHOUT a shell; the `"{message}"` element is replaced with the text. |
-| `notifyCommand` | string or `null` | `null` | **Legacy / deprecated** alert transport. A shell template containing `{message}`. See the security note below. |
-
-### `dataDir`
 ```json
-"dataDir": "./examples"
-```
-
-### `logDirs`
-```json
-"logDirs": ["./examples/logs", "/home/me/agent/memory/daily"]
-```
-
-### `dimensions`
-```json
-"dimensions": 4096
-```
-
-### `projectsDir`
-```json
-"projectsDir": "./examples/projects"
-```
-
-### `candidatesDir`
-```json
-"candidatesDir": "./examples/project-candidates"
-```
-Where you draft candidate files (`<slug>.md`) for the `promote` flow. Defaults to
-`<dataDir>/project-candidates`. See [`../CANDIDATES.md`](../CANDIDATES.md) for the grammar and gates.
-
-### Candidate runtime files (under `dataDir`)
-- `autopromote.json` (`{version:1, enabled:boolean}`): whether the nightly `sweep-candidates --write`
-  self-mints unattended-safe candidates. Written by `autopromote on|off`; a missing or malformed file
-  is treated as disabled (fail-closed). Git-ignored.
-- `candidate-events.jsonl`: an advisory, deduplicated audit line per candidate action
-  (`created`/`rejected`/`promoted`/`promote-failed`/`undone`). Carries no log text or paths. Nothing
-  depends on it for correctness. Git-ignored.
-- `.tastebud.lock` (beside `dataDir`): the advisory single-writer lock every mutating command holds.
-  Reaped automatically if its recorded process is gone. Git-ignored.
-
-### `localModel`
-Off by default (`null`). When enabled it must point at an **OpenAI-compatible chat-completions
-endpoint** (LM Studio, llama.cpp `--api`, Ollama's `/v1`, vLLM, etc.). The sweeper only calls it
-when the primary tagger left no valid inbox file. It retries up to **3 attempts** per day with a
-**120-second** timeout each, so the worst case before it gives up on a day is about **6 minutes**
-(3 x 120s, minus early failures). `key` is optional (sent as `Authorization: Bearer <key>`).
-```json
-"localModel": {
-  "url": "http://localhost:1234/v1/chat/completions",
-  "model": "your-local-model-id",
-  "key": "optional-bearer-token"
+{
+  "workspaceId": "team-workspace",
+  "workspaceDir": "/private/workspace",
+  "dataDir": "/private/workspace/tastebud-data",
+  "memoryDb": "/private/workspace/tastebud-data/memory.sqlite",
+  "logDirs": ["/private/workspace/memory/daily", "/private/workspace/memory/archive"],
+  "projectsDir": "/private/workspace/memory/projects",
+  "candidatesDir": "/private/workspace/memory/project-candidates",
+  "memorySourceDirs": ["/private/workspace/memory"],
+  "timezone": "America/Chicago",
+  "dimensions": 4096,
+  "localModel": null,
+  "notifyArgs": null
 }
 ```
 
-### `notifyArgs` (recommended)
-Spawned without a shell, so the multi-line digest arrives intact and no log-derived text is ever
-interpreted as shell syntax.
-```json
-"notifyArgs": ["ntfy", "publish", "my-topic", "{message}"]
-```
+| Field | Contract |
+|---|---|
+| `workspaceId` | Stable logical identity, independent of machine paths. Required by the lifecycle store. Do not reuse it for unrelated workspaces. |
+| `workspaceDir` | Root containing captured Markdown sources. Source paths must resolve inside it. |
+| `dataDir` | Existing directory containing `codebook.json` and `compositions.json`. |
+| `memoryDb` | SQLite database; defaults to `<dataDir>/memory.sqlite`. |
+| `logDirs` | Existing daily/archive directories; duplicate dates across directories are ambiguous and rejected. |
+| `projectsDir`, `candidatesDir` | Existing directories required for candidate operations. |
+| `memorySourceDirs` | Directories scanned recursively by `sync`; use only intended source directories, never the full home directory. |
+| `timezone` | One IANA business timezone for day maturity, lookback, and decisions. Default UTC. |
+| `dimensions` | Integer >=64; default4096. Only affects experimental fingerprints. |
+| `inboxProducer` | Configured writer label; default `inbox-unverified`. Inbox self-labels are assertions, not proof of supervision. |
+| `legacyRows` | Optional date-to-SHA256 map of individually reviewed legacy composition rows; exceptions remain visible. |
+| `localModel` | Optional `{url, model, key?}` completion endpoint. Null disables fallback. Dry runs never call it. |
+| `notifyArgs` | Executable and argv array; whole arguments `{message}` and `{id}` are substituted without a shell. |
+| `notifyAckPattern` | Optional regex matching a delivery receipt on stdout. Default contract is successful process exit. |
+| `gitCheckpoint` | Explicit opt-in to weekly path-limited Git commits; default off. |
+| `backupPaths` | Additional workspace directories containing pending queues to include in portable backups. |
+| `projectRoots` | Optional absolute working-directory-to-project map for capture hooks. |
+| `captureDefaultProject` | Existing project receiving otherwise unmapped checkpoints; leave unset to skip them. |
+| `transcriptRoots` | Explicit roots from which a hook may read a transcript when the host does not supply the last assistant message. |
 
-### `notifyCommand` (legacy, deprecated)
-A shell command line with `{message}`. Two hazards, both named in `tagger.mjs`: on Windows a shell
-command line silently truncates a multi-line message at the first newline (so the digest's decide
-table never arrives, exit 0, no error), and because the digest text derives from your logs, any
-shell metacharacters in it run through a shell. Prefer `notifyArgs`. Only `"`, `` ` ``, and `$` are
-sanitized and newlines are flattened to `" | "`; that is not a substitute for the shell-less form.
-```json
-"notifyCommand": "curl -s -d {message} https://ntfy.sh/my-topic"
-```
+`notifyCommand` is retired and rejected. Keep credentials in private configuration or host environment configuration. Do not commit them into this repository.
 
-## Environment variables
+Codebook entries support `aliases`, `parent`, `class`, explicit `document_path`, and optional `canonical_slug`. A redirect must resolve to an existing project and cannot cycle. Alias names are Unicode-normalized, case-insensitive, and unique across logical projects. Historical vector keys remain intact after redirects. Run `sync` after changing the codebook to update the lifecycle identity registry.
 
-All are optional and override the defaults below at runtime.
+Relevant environment variables:
 
-### Triage tuning (read by `tastebud.mjs`)
+- `TASTEBUD_CONFIG`: exact configuration path.
+- `TASTEBUD_PRODUCER`: client/CLI writer attribution.
+- `TASTEBUD_WRITES=1`: expose MCP write tools.
+- `TASTEBUD_TOOL_PREFIX`: optional compatibility prefix for exact-query MCP names; lifecycle names remain `memory_*`.
+- `TASTEBUD_NO_DIGEST=1`: suppress nightly digest delivery.
+- `TASTEBUD_LOOKBACK_DAYS`: bounded nightly retry window (default10).
+- `TASTEBUD_STALE_DAYS`: age before a missing log is called stale (default2).
+- `TASTEBUD_CANDIDATE_COMPANION_MAX`: bounded candidate co-occurrence ceiling in [0,1], default0.30.
 
-| Var | Type | Default | Meaning | Example |
-|-----|------|---------|---------|---------|
-| `TASTEBUD_RIPE_DAYS` | int | `2` | Distinct-days threshold at which an unknown is ripe to decide. | `TASTEBUD_RIPE_DAYS=3` |
-| `TASTEBUD_RIPE_MASS` | float | `0.5` | Accumulated major-weight threshold for ripeness. | `TASTEBUD_RIPE_MASS=0.75` |
-| `TASTEBUD_RIPE_AGE_DAYS` | int | `7` | Age (days since first seen) that alone makes an unknown ripe. | `TASTEBUD_RIPE_AGE_DAYS=10` |
-| `TASTEBUD_OVERDUE_AGE_DAYS` | int | `14` | Age at which a ripe, still-open unknown is marked `OVERDUE`. | `TASTEBUD_OVERDUE_AGE_DAYS=21` |
-| `TASTEBUD_REVIVE_DELTA_DAYS` | int | `1` | Extra days beyond the dismissal baseline that revive a dismissed unknown. | `TASTEBUD_REVIVE_DELTA_DAYS=2` |
-| `TASTEBUD_UNKNOWN_AGE_DAYS` | int | `14` | Age used with the min-days gate to sort escalated unknowns first. | `TASTEBUD_UNKNOWN_AGE_DAYS=10` |
-| `TASTEBUD_UNKNOWN_MIN_DAYS` | int | `3` | Min distinct days for that escalation sort. | `TASTEBUD_UNKNOWN_MIN_DAYS=2` |
-| `TASTEBUD_UNKNOWN_ALIAS_HINT` | float | `0.40` | Neighbor co-occurrence score above which `alias` is the recommendation. | `TASTEBUD_UNKNOWN_ALIAS_HINT=0.5` |
-| `TASTEBUD_UNKNOWN_ALIAS_MIN_DAYS` | int | `2` | Min days seen before an `alias` recommendation is offered. | `TASTEBUD_UNKNOWN_ALIAS_MIN_DAYS=3` |
-| `TASTEBUD_CANDIDATE_COMPANION_MAX` | float in [0,1] | `0.30` | Candidate gate g6 ceiling: a candidate is refused if any known codebook slug is a companion at or above this share. Must parse to a finite number in [0,1]; a bad value is a fail-closed error (it never silently disables the guard). | `TASTEBUD_CANDIDATE_COMPANION_MAX=0.25` |
-
-### Sweeper behavior (read by `tagger.mjs`)
-
-| Var | Type | Default | Meaning | Example |
-|-----|------|---------|---------|---------|
-| `TASTEBUD_LOOKBACK_DAYS` | int | `10` | How many days back a dateless `nightly` sweep scans, so a late-written log is still picked up. | `TASTEBUD_LOOKBACK_DAYS=14` |
-| `TASTEBUD_STALE_DAYS` | int | `2` | Age at which a still-missing daily log is reported as a no-log note (younger days stay silent). | `TASTEBUD_STALE_DAYS=3` |
-| `TASTEBUD_CHECKPOINT` | `1` | (unset) | Force the weekly git data checkpoint on a write run regardless of weekday. | `TASTEBUD_CHECKPOINT=1` |
-| `TASTEBUD_NO_DIGEST` | any value | (unset) | Suppress the nightly digest send (use for manual/backfill runs so a batch does not push a digest per invocation). | `TASTEBUD_NO_DIGEST=1` |
+Keep fallback failure, storage integrity, source coverage, delivery receipts, and retrieval usefulness as separate health signals. A successful tag does not prove all five are healthy.

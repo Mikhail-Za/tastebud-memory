@@ -1,3 +1,7 @@
+# Current version
+
+For version 2, use the [operating guide](operating-guide.md) and [migration matrix](migration-v2.md). The scheduling pattern below remains useful; configuration and recovery contracts in those guides take precedence.
+
 # Production pattern: primary LLM cron + deterministic sweeper + alerted fallback
 
 This is the wiring that runs nightly in the original deployment (a scheduled agent platform on
@@ -111,7 +115,7 @@ or fabricated quote simply fails gate g7 and never mints.
 
 `promote` is one atomic transaction with a durable `via:promote` ledger marker, so an interrupted
 run is always recoverable. `node tastebud.mjs check` reconciles every `via:promote` entry against
-the codebook, the project file (by sha), and the candidate directory, and prints an
+the codebook, the project file plus its immutable promotion artifact (by sha), and the candidate directory, and prints an
 `INCOMPLETE-PROMOTION` line with the exact artifact and a one-line repair for any deviation. Wire
 `check` into the same nightly cron (or a monitor) so a rare interrupted promotion surfaces the next
 morning instead of silently. Founding or hand-added codebook keys have no ledger entry and are never

@@ -1,0 +1,11 @@
+{
+  "name": "tastebud-memory",
+  "version": "2.0.0",
+  "private": true,
+  "type": "module",
+  "engines": { "node": ">=22.16.0" },
+  "scripts": {
+    "test": "node --test test/*.test.mjs && node tastebud.mjs selftest-candidates",
+    "check": "node tastebud.mjs check"
+  }
+}

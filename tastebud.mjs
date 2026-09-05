@@ -42,6 +42,8 @@ import { createHash } from 'node:crypto';
 import { spawnSync, spawn } from 'node:child_process';
 import { loadConfig, validateConfig, loadData, validateCandidateDirs, resolveLogDirs, resolveLog, companionMax } from './validate.mjs';
 import { withLock, writeAtomic, writeFully } from './lock.mjs';
+import { aliasIndex, nameKey, businessDate } from './lib/schema.mjs';
+import { exactQuery } from './lib/exact.mjs';
 
 // Runtime floor: this engine uses ESM + global fetch (Node 18+). Fail fast with one line
 // rather than a confusing "fetch is not defined" deeper in.
@@ -105,7 +107,7 @@ function buildKnownAliased(cb) {
   return { KNOWN, ALIASED };
 }
 
-const { codebook, comps } = loadData(DATA);
+const { codebook, comps, warnings } = loadData(DATA, config.legacyRows ?? {});
 const days = normalizeDays(comps);
 const { KNOWN, ALIASED } = buildKnownAliased(codebook);
 
@@ -138,23 +140,18 @@ function provTag(d) {
   const f = Array.isArray(d.flags) ? d.flags : [];
   if (!f.length) return '';
   const src = f.find(x => x !== 'nightly') || f.join(',');
-  const mark = /oauth|cron/.test(src) ? '~cron'
-             : /local|fallback/.test(src) ? '!local'
-             : '*supervised';
+  const mark = d.provenance?.trust === 'agent-proposal' ? 'agent-proposal'
+             : /local|fallback/.test(src) ? '!local' : 'legacy-unverified';
   return `  [${mark}: ${src}]`;
 }
 
 // ---------- taste-profile (shared by tasteslike + unknowns + candidate gate g6) ----------
 // A slug's flavor comes from CONTEXT: the company it keeps (co-occurring major work, weighted
-// by both shares and rarity). Rarity weighting (inverse day-frequency) down-weights ubiquitous
-// companions (e.g. a daily monitor or ops chore) that say little about identity.
+// by both activity shares). This bounded co-occurrence measure is independent of unrelated days.
+// Shared activity is only an identity-review signal, never proof that names identify one project.
 // Factory over a `days` array so the SAME math runs on module-load days (reads) and on fresh
 // in-lock days (gates), from one definition. companion_share(n) = companions.get(n) / activity.
 function makeTaste(days) {
-  const df = new Map();
-  for (const d of days) for (const m of d.major) df.set(m.slug, (df.get(m.slug) ?? 0) + 1);
-  const activeDays = days.filter(d => d.major.length).length;
-  const idf = s => Math.log(1 + activeDays / (df.get(s) ?? 1));
   function tasteProfile(slug) {
     const companions = new Map();
     let activity = 0;
@@ -163,19 +160,19 @@ function makeTaste(days) {
       if (!m) continue;
       activity += m.w;
       for (const o of d.major) if (o.slug !== slug)
-        companions.set(o.slug, (companions.get(o.slug) ?? 0) + m.w * o.w * idf(o.slug));
+        companions.set(o.slug, (companions.get(o.slug) ?? 0) + m.w * o.w);
     }
     const p = new Float64Array(D);
     for (const [cs, cw] of companions) { const v = vec(cs); for (let i = 0; i < D; i++) p[i] += cw * v[i]; }
     return { p, activity, companions };
   }
-  return { tasteProfile, idf, activeDays };
+  return { tasteProfile };
 }
 const { tasteProfile } = makeTaste(days);
 
 // ---------- decision ledger (persistent triage memory; round-trips, snapshots before write) ----------
 const LEDGER_PATH = join(DATA, 'unknowns-ledger.json');
-const today = () => new Date().toISOString().slice(0, 10);  // UTC YYYY-MM-DD
+const today = () => businessDate(config.timezone ?? 'UTC');  // UTC YYYY-MM-DD
 function loadLedger() {
   if (!existsSync(LEDGER_PATH)) return { version: 1, entries: {} };
   return JSON.parse(readFileSync(LEDGER_PATH, 'utf8'));
@@ -194,6 +191,7 @@ function buildLedgerEntry(prev, status, fields = {}) {
   if (prev && prev.status === 'minted' && prev.via === 'promote' && status !== 'minted' && status !== 'undone')
     throw new Error(`refusing to overwrite promotion provenance: a candidate-promoted mint can only be reversed with "mint <slug> --undo", not "${status}"`);
   const e = { status };
+  if (prev) e.history = [...(prev.history ?? []), Object.fromEntries(Object.entries(prev).filter(([k]) => k !== 'history'))];
   switch (status) {
     case 'open':
       break;
@@ -212,6 +210,8 @@ function buildLedgerEntry(prev, status, fields = {}) {
       break;
     case 'watching':
       e.decided_on = fields.decided_on;
+      e.review_on = fields.review_on ?? prev?.review_on ?? new Date(Date.parse(today()) + 7 * 86400000).toISOString().slice(0, 10);
+      e.baseline_days = fields.baseline_days ?? prev?.baseline_days ?? 0;
       if (fields.note) e.note = fields.note;
       break;
     case 'aliased':
@@ -257,7 +257,7 @@ function unknownRows({ codebook, ledger, days }) {
   const OVERDUE_AGE = parseInt(process.env.TASTEBUD_OVERDUE_AGE_DAYS ?? '14', 10);
   const REVIVE_DELTA = parseInt(process.env.TASTEBUD_REVIVE_DELTA_DAYS ?? '1', 10);
   const now = new Date();
-  const todayUTC = Date.parse(now.toISOString().slice(0, 10) + 'T00:00:00Z');
+  const todayUTC = Date.parse(today() + 'T00:00:00Z');
   const ageDays = from => Math.round((todayUTC - Date.parse(from + 'T00:00:00Z')) / 86400000);
   const led = ledger;
 
@@ -298,7 +298,7 @@ function unknownRows({ codebook, ledger, days }) {
       // ledger-backed decision state and "back from the dead" revival.
       const entry = led.entries[slug];
       const status = entry?.status ?? 'open';
-      const revived = status === 'dismissed' && days_seen >= ((entry?.baseline_days ?? 0) + REVIVE_DELTA);
+      const revived = (status === 'dismissed' && days_seen >= ((entry?.baseline_days ?? 0) + REVIVE_DELTA)) || (status === 'watching' && ((entry.review_on ?? '9999') <= today() || days_seen > (entry.baseline_days ?? days_seen)));
       // recommendation: confident alias if a strong, settled neighbor exists; else mint once ripe; else dismiss.
       let recommend, recommendTarget = null, reason;
       if (top && top.score >= ALIAS_HINT && days_seen >= ALIAS_MIN_DAYS) {
@@ -320,7 +320,7 @@ function unknownRows({ codebook, ledger, days }) {
           ? `thin so far (${days_seen} day(s), mass ${fmt(e.majorMass)}); closest is ${top.slug} (${fmt(top.score)}) but too early to commit`
           : `thin so far (${days_seen} day(s), mass ${fmt(e.majorMass)}) and no companions; likely a one-off`;
       }
-      if (revived && recommend === 'dismiss') {
+      if (revived && status === 'dismissed' && recommend === 'dismiss') {
         recommend = 'watch';
         reason = `active again after you dismissed it on ${entry.decided_on}; still thin (${days_seen} day(s), mass ${fmt(e.majorMass)}) but worth keeping an eye on`;
       }
@@ -371,7 +371,7 @@ function writeUnknownsReport(rows = computeUnknownRows(), led = loadLedger()) {
     out.push(`### ${r.slug}  [${r.overdue ? 'OVERDUE ' : ''}open ${r.age}d, ${r.days_seen} day(s), mass ${fmt(r.major_mass)}]`);
     out.push(`- keeps company with: ${nb(r)}`);
     out.push(`- recommend: **${verdict(r)}**: ${r.reason}`);
-    if (r.revived) out.push(`- NOTE: you dismissed this on ${led_decided_on(r.slug, led)}, but it is active again`);
+    if (r.revived) out.push(`- NOTE: review due after ${r.status} decision on ${led_decided_on(r.slug, led)}; new evidence or review date reached`);
     out.push('');
   }
 
@@ -390,7 +390,7 @@ function writeUnknownsReport(rows = computeUnknownRows(), led = loadLedger()) {
   }
 
   const path = join(DATA, 'unknowns-report.md');
-  writeFileSync(path, out.join('\n'), 'utf8');
+  writeAtomic(path, out.join('\n'));
   return path;
 }
 
@@ -678,6 +678,9 @@ function promoteViaCandidate({ slug, candidatesDir, projectsDir, logDirs, unatte
       const st2 = lstatSync(candPath);
       if (!st2.isFile() || dirname(realpathSync(candPath)) !== realpathSync(candidatesDir) || sha256(readFileSync(candPath)) !== sha)
         throw new Error('candidate changed under us at the commit point');
+      const artifactDir = join(DATA, 'promotion-artifacts');
+      mkdirSync(artifactDir, { recursive: true });
+      writeAtomic(join(artifactDir, sha + '.md'), bytes);
       unlinkSync(candPath); killpoint('4d');
       // COMMITTED. 4e post-commit best-effort (advisory: warns, never fails the promote).
       try { appendEvent({ slug, event: 'promoted', candidateSha: sha, detail: unattended ? 'unattended' : 'human' }); }
@@ -1116,7 +1119,12 @@ async function runSelftestCandidates() {
 // ---------- commands ----------
 const [cmd, ...args] = process.argv.slice(2);
 
-if (cmd === 'check') {
+if (['decode', 'where', 'first', 'cooccur', 'window', 'diff', 'gaps', 'coverage', 'project'].includes(cmd) && !args.includes('--approx')) {
+  try { console.log(JSON.stringify(exactQuery(config, codebook, comps, cmd, args.filter(a => a !== '--json')), null, 2)); }
+  catch (e) { console.error(e.message); process.exitCode = 1; }
+}
+else if (cmd === 'check') {
+  for (const warning of warnings ?? []) console.log('LEGACY-EXCEPTION: ' + warning);
   let issues = 0;
   for (const d of days) {
     const sum = d.major.reduce((s, m) => s + m.w, 0);
@@ -1142,7 +1150,12 @@ if (cmd === 'check') {
         else {
           const pf = join(pDir, slug + '.md');
           if (!existsSync(pf)) problems.push(`project file missing (${basename(pf)})`);
-          else if (sha256(readFileSync(pf)) !== e.promote_sha) problems.push(`project file sha != promote_sha (${basename(pf)})`);
+          else {
+            const artifact = join(DATA, 'promotion-artifacts', e.promote_sha + '.md');
+            if (existsSync(artifact)) {
+              if (sha256(readFileSync(artifact)) !== e.promote_sha) problems.push('immutable promotion artifact corrupted');
+            } else if (sha256(readFileSync(pf)) !== e.promote_sha) problems.push(`project file sha != promote_sha (${basename(pf)}); legacy promotion needs artifact migration`);
+          }
         }
         const cf = join(cDir, slug + '.md');
         if (existsSync(cf)) problems.push(`candidate file still present (${basename(cf)})`);
@@ -1155,14 +1168,14 @@ if (cmd === 'check') {
     }
   }
   const t = days.find(d => d.major.length >= 2) ?? days[0];
-  const rec = decodeBundle(bundle(t), t.major.map(m => m.slug));
-  const ok = t.major.every(m => {
+  const rec = t ? decodeBundle(bundle(t), t.major.map(m => m.slug)) : [];
+  const ok = !t || t.major.every(m => {
     const r = rec.find(x => x.slug === m.slug);
     return r && Math.abs(r.est - m.w) < 0.05;
   });
   console.log(`days=${days.length} slugs=${KNOWN.size} D=${D}`);
-  console.log(`vector-recovery sanity (${t.date}): ${ok ? 'PASS' : 'FAIL'}`);
-  console.log(issues ? `${issues} data issue(s) (normalized at load)` : 'no data issues');
+  console.log(`vector-recovery sanity (${t?.date ?? 'empty'}): ${ok ? 'PASS' : 'FAIL'}`);
+  console.log(issues ? `${issues} data issue(s) (raw validation)` : 'no data issues');
   // Non-zero exit on any data issue or a failed vector-recovery so `check` is CI/script usable.
   if (issues || !ok) process.exitCode = 1;
 }
@@ -1381,7 +1394,7 @@ else if (cmd === 'unknowns') {
 
   // ---- optional: triage-ready markdown report ----
   if (process.argv.includes('--write')) {
-    const path = writeUnknownsReport(rows);
+    const path = withLock(DATA, () => { const fresh=loadFresh(); return writeUnknownsReport(unknownRows(fresh),fresh.ledger); });
     console.log(`wrote ${path}`);
   }
 }
@@ -1428,6 +1441,9 @@ else if (cmd === 'mint') {
     const { KNOWN: K } = buildKnownAliased(cb);
     const err = mintCheck(K, { slug, parent, klass });
     if (err) return { ok: false, error: err };
+    const names = aliasIndex(cb);
+    if (names.has(nameKey(slug))) return { ok: false, error: 'slug collides with an alias' };
+    if (new Set(aliases.map(nameKey)).size !== aliases.length || aliases.some(a => !a.trim() || /[\x00-\x1f]/.test(a) || names.has(nameKey(a)) || nameKey(a) === nameKey(slug))) return { ok: false, error: 'invalid or colliding alias' };
     const has_file = projectFileExists(slug);
     mintApply(cb, { slug, parent, aliases, klass, has_file });
     saveCodebookAtomic(cb);
@@ -1451,6 +1467,7 @@ else if (cmd === 'alias') {
     const { KNOWN: K } = buildKnownAliased(cb);
     if (!K.has(target)) return { ok: false, error: `target "${target}" is not a codebook key` };
     if (K.has(name)) return { ok: false, error: `"${name}" is already a codebook key (alias onto a slug, not a slug onto itself)` };
+    if (!name.trim() || name.length > 200 || /[\x00-\x1f]/.test(name) || aliasIndex(cb).has(nameKey(name))) return { ok: false, error: 'invalid or colliding alias' };
     let entry2;
     try { entry2 = buildLedgerEntry(ledger.entries[name], 'aliased', { decided_on: today(), alias_target: target }); }
     catch (e) { return { ok: false, error: e.message }; }
@@ -1465,6 +1482,22 @@ else if (cmd === 'alias') {
   if (!res.ok) { console.log(`refused: ${res.error}`); process.exit(1); }
   console.log(`aliased "${res.name}" -> "${res.target}" (added to ${res.target}.aliases; "${res.name}" now resolves)`);
   console.log(`regenerated ${join(DATA, 'unknowns-report.md')}`);
+}
+
+else if (cmd === 'unalias') {
+  const [name] = args;
+  const result = withLock(DATA, () => {
+    const {codebook: cb, ledger, days:d} = loadFresh();
+    if (!name || Object.keys(cb.projects).some(s=>nameKey(s)===nameKey(name))) throw new Error('provide an alias, not a canonical project');
+    const target = aliasIndex(cb).get(nameKey(name));
+    if (!target) throw new Error('unknown alias');
+    for (const p of Object.values(cb.projects)) p.aliases=(p.aliases??[]).filter(a=>nameKey(a)!==nameKey(name));
+    saveCodebookAtomic(cb);
+    ledger.entries[name]=buildLedgerEntry(ledger.entries[name],'undone',{decided_on:today()});
+    saveLedgerAtomic(ledger);
+    return {name,target,status:'undone'};
+  });
+  console.log(JSON.stringify(result));
 }
 
 else if (cmd === 'dismiss') {
@@ -1497,7 +1530,7 @@ else if (cmd === 'watch') {
   const res = withLock(DATA, () => {
     const { codebook: cb, ledger, days: d } = loadFresh();
     let entry2;
-    try { entry2 = buildLedgerEntry(ledger.entries[slug], 'watching', { decided_on: today(), ...(note ? { note } : {}) }); }
+    try { entry2 = buildLedgerEntry(ledger.entries[slug], 'watching', { decided_on: today(), baseline_days: unknownRows({ codebook: cb, ledger, days: d }).find(r => r.slug === slug)?.days_seen ?? 0, ...(note ? { note } : {}) }); }
     catch (e) { return { ok: false, error: e.message }; }
     const led2 = { ...ledger, entries: { ...ledger.entries, [slug]: entry2 } };
     saveLedgerAtomic(led2);
@@ -1515,7 +1548,7 @@ else if (cmd === 'decisions') {
   const entries = Object.entries(led.entries);
   if (!entries.length) { console.log('ledger empty (no decisions recorded).'); process.exit(0); }
   console.log(`decision ledger: ${entries.length} entr${entries.length === 1 ? 'y' : 'ies'}`);
-  for (const status of ['watching', 'dismissed', 'minted', 'aliased']) {
+  for (const status of ['watching', 'dismissed', 'minted', 'aliased', 'undone']) {
     const group = entries.filter(([, e]) => e.status === status);
     if (!group.length) continue;
     console.log(`\n${status} (${group.length}):`);
@@ -1536,7 +1569,7 @@ else if (cmd === 'autofile') {
   const result = withLock(DATA, () => {
     const { codebook: cb, ledger, days: d } = loadFresh();
     const candidates = unknownRows({ codebook: cb, ledger, days: d })
-      .filter(r => r.major_mass > 0 && SLUG_RE.test(r.slug) && projectFileExists(r.slug));
+      .filter(r => r.status === 'open' && r.major_mass > 0 && SLUG_RE.test(r.slug) && projectFileExists(r.slug));
     if (!candidates.length) return { filed: [], candidates: [], write };
     const filed = [];
     let led = ledger, cur = cb;
@@ -1631,12 +1664,12 @@ else if (cmd === 'digest') {
     const f = decide[0].slug;
     out.push(`  reply: "dismiss ${f}" / "mint ${f}" / "watch ${f}" / "alias ${f} onto <someExistingCodebookSlug>"`);
     out.push('');
-    out.push(`tagged ${latestDay} (${tagLabel}) | maturing ${maturingN} | ${slugN} slugs | ok`);
+    out.push(`tagged ${latestDay} (${tagLabel}) | maturing ${maturingN} | ${slugN} slugs | tagging recorded; see coverage`);
     if (recent) out.push(`recently: ${recent}`);
   } else {
     let pulse = `🎨 Tastebud - ${ymd}: tagged ${latestDay} (${tagLabel}). 0 to decide.`;
     if (maturingN > 0) pulse += ` ${maturingN} maturing.`;
-    pulse += ` ${slugN} slugs, ok.`;
+    pulse += ` ${slugN} slugs. See coverage for source health.`;
     out.push(pulse);
     if (recent) out.push(`recently: ${recent}`);
   }
@@ -1744,46 +1777,22 @@ else if (cmd === 'sweep-candidates') {
 }
 
 else if (cmd === 'migrate-ledger') {
-  // Normalize the ledger to {version:1, entries} with every entry rewritten to the whitelist schema.
-  // Idempotent; --dry prints the diff; ABORTS (writes nothing) on a shape it cannot map.
-  const dry = process.argv.includes('--dry');
-  if (!existsSync(LEDGER_PATH)) { console.log('no ledger file - nothing to migrate'); process.exit(0); }
-  const src = JSON.parse(readFileSync(LEDGER_PATH, 'utf8'));
-  const entries = (src && src.entries && typeof src.entries === 'object') ? src.entries : {};
-  const out = { version: 1, entries: {} };
-  try {
-    for (const [slug, e] of Object.entries(entries)) {
-      const status = e && e.status;
-      if (!LEDGER_STATUSES.includes(status))
-        throw new Error(`slug "${slug}" has unmappable status ${JSON.stringify(status)}`);
-      const fields = {
-        decided_on: e.decided_on, via: e.via, promote_sha: e.promote_sha,
-        baseline_days: e.baseline_days, note: e.note, alias_target: e.alias_target,
-        first_ripe_on: e.first_ripe_on, first_sent_on: e.first_sent_on,
-      };
-      if (status === 'minted' && e.via === 'promote' && !e.promote_sha)
-        throw new Error(`slug "${slug}" is minted via:promote but has no promote_sha`);
-      if (status === 'aliased' && !e.alias_target)
-        throw new Error(`slug "${slug}" is aliased but has no alias_target`);
-      out.entries[slug] = buildLedgerEntry(null, status, fields);
+  const dry=args.includes('--dry');
+  const migrate=()=>{
+    if (!existsSync(LEDGER_PATH)) {console.log('no ledger to migrate');return;}
+    const src=JSON.parse(readFileSync(LEDGER_PATH,'utf8')), out={version:1,entries:{}};
+    for (const [slug,e] of Object.entries(src.entries??{})) {
+      if (!LEDGER_STATUSES.includes(e.status)) throw new Error('unmappable ledger status for '+slug);
+      if (e.status==='aliased'&&!e.alias_target) throw new Error('missing alias target for '+slug);
+      out.entries[slug]={...buildLedgerEntry(null,e.status,e),...(e.history?{history:e.history}:{})};
     }
-  } catch (e) {
-    console.error(`migrate-ledger ABORTED (nothing written): ${e.message}`);
-    process.exit(1);
-  }
-  const before = JSON.stringify(src, null, 2), after = serializeLedger(out);
-  if (before === after) { console.log('ledger already normalized (no change)'); process.exit(0); }
-  if (dry) {
-    console.log('migrate-ledger --dry: would rewrite unknowns-ledger.json');
-    console.log('--- before ---'); console.log(before);
-    console.log('--- after ----'); console.log(after);
-    process.exit(0);
-  }
-  withLock(DATA, () => {
-    try { copyFileSync(LEDGER_PATH, LEDGER_PATH + '.bak'); } catch {}
-    saveLedgerAtomic(out);
-  });
-  console.log('migrate-ledger: rewrote unknowns-ledger.json to {version:1, entries} (backup at unknowns-ledger.json.bak)');
+    if (JSON.stringify(src) === JSON.stringify(out)) {console.log('ledger already normalized (no change)');return;}
+    if (dry) {console.log(JSON.stringify({dry:true,before:src,after:out},null,2));return;}
+    copyFileSync(LEDGER_PATH,LEDGER_PATH+'.bak');saveLedgerAtomic(out);
+    console.log('ledger migrated under lock; preimage retained');
+  };
+  try { if (dry) migrate(); else withLock(DATA,migrate); }
+  catch(e) {console.error('migrate-ledger ABORTED (nothing written): '+e.message);process.exitCode=1;}
 }
 
 else if (cmd === 'mark-sent') {

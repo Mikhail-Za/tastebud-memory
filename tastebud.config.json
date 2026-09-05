@@ -1,10 +1,20 @@
 {
   "dataDir": "./examples",
-  "logDirs": ["./examples/logs"],
+  "logDirs": [
+    "./examples/logs"
+  ],
   "candidatesDir": "./examples/project-candidates",
   "projectsDir": "./examples/projects",
   "dimensions": 4096,
   "localModel": null,
   "notifyCommand": null,
-  "notifyArgs": null
+  "notifyArgs": null,
+  "workspaceId": "tastebud-example-workspace",
+  "workspaceDir": ".",
+  "memoryDb": "./examples/memory.sqlite",
+  "memorySourceDirs": [
+    "./examples/projects",
+    "./examples/logs"
+  ],
+  "timezone": "UTC"
 }

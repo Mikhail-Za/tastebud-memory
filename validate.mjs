@@ -5,6 +5,7 @@
 
 import { readFileSync, existsSync, statSync, realpathSync } from 'node:fs';
 import { join, resolve } from 'node:path';
+import { validateDataset } from './lib/schema.mjs';
 
 function die(msg) {
   console.error(`tastebud: ${msg}`);
@@ -26,6 +27,10 @@ function readJSON(path, label) {
 // Locate + parse tastebud.config.json (cwd first, then the script dir). Missing file and
 // malformed JSON both exit with a one-liner instead of throwing.
 export function loadConfig(scriptDir) {
+  if (process.env.TASTEBUD_CONFIG) {
+    const p = resolve(process.env.TASTEBUD_CONFIG);
+    return { ...readJSON(p, 'TASTEBUD_CONFIG'), _configDir: resolve(p, '..') };
+  }
   for (const dir of [process.cwd(), scriptDir]) {
     const p = join(dir, 'tastebud.config.json');
     if (existsSync(p)) return { ...readJSON(p, 'tastebud.config.json'), _configDir: dir };
@@ -38,6 +43,8 @@ export function loadConfig(scriptDir) {
 // when a candidate command actually runs (see validateCandidateDirs), so the legacy commands keep
 // working on a config that never mentions them.
 export function validateConfig(config, configDir) {
+  if (config.notifyCommand) die('notifyCommand is retired; configure notifyArgs without a shell');
+  try { new Intl.DateTimeFormat('en', { timeZone: config.timezone ?? 'UTC' }); } catch { die('invalid config timezone'); }
   const dims = config.dimensions ?? 4096;
   if (!Number.isInteger(dims) || dims < 64)
     die(`config "dimensions" must be an integer >= 64 (got ${JSON.stringify(config.dimensions)})`);
@@ -103,7 +110,7 @@ export function companionMax() {
 }
 
 // Load + shape-check the two data files. Returns { codebook, comps }.
-export function loadData(DATA) {
+export function loadData(DATA, legacyRows = {}) {
   const codebook = readJSON(join(DATA, 'codebook.json'), 'codebook.json');
   if (!codebook.projects || typeof codebook.projects !== 'object' || Array.isArray(codebook.projects))
     die('codebook.json: "projects" must be an object of slug entries');
@@ -119,5 +126,7 @@ export function loadData(DATA) {
     if ('minor' in d && !Array.isArray(d.minor))
       die(`compositions.json: days[${i}] (${d.date}) "minor" must be an array`);
   });
-  return { codebook, comps };
+  let warnings;
+  try { warnings = validateDataset(codebook, comps, legacyRows); } catch (e) { die(e.message); }
+  return { codebook, comps, warnings };
 }

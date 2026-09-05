@@ -18,6 +18,9 @@ import { readFileSync, writeFileSync, appendFileSync, existsSync, unlinkSync, co
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
+import { deliver } from './lib/delivery.mjs';
+import { ingest, parseProposal } from './lib/ingest.mjs';
+import { businessDate, realDate, hash } from './lib/schema.mjs';
 import { loadConfig, validateConfig, loadData, resolveLog, resolveLogDirs } from './validate.mjs';
 
 // Runtime floor: this sweeper uses ESM + global fetch (Node 18+). Fail fast with one line.
@@ -53,29 +56,8 @@ const STALE_DAYS = Math.max(1, Number(process.env.TASTEBUD_STALE_DAYS) || 2);
 const nologDays = [];
 
 function notify(text) {
-  // Optional push to any chat/alert service. Preferred: config.notifyArgs, an argv array
-  // whose "{message}" element is replaced with the text and spawned WITHOUT a shell, e.g.
-  // ["ntfy", "publish", "my-topic", "{message}"]. This is the only form that delivers
-  // multi-line digests intact: a shell command line silently truncates at the first
-  // newline on Windows (exit 0, no stderr - the rest of the message just vanishes).
-  // Legacy: config.notifyCommand, a shell template containing {message}; newlines are
-  // flattened to " | " there because a shell command line cannot carry them.
-  // Failures never break tagging. Returns {ok, id?}: exit 0 is the reference ack the sweeper uses to
-  // decide whether to stamp mark-sent. An unconfigured transport is NOT an ack (nothing was sent).
-  try {
-    let r;
-    if (Array.isArray(config.notifyArgs) && config.notifyArgs.length) {
-      const argv = config.notifyArgs.map(a => a === '{message}' ? text : a);
-      r = spawnSync(argv[0], argv.slice(1), { encoding: 'utf8', timeout: 30000 });
-    } else if (config.notifyCommand) {
-      const safe = text.replace(/["`$]/g, "'").replace(/\r?\n/g, ' | ');
-      const cmd = config.notifyCommand.replace('{message}', safe);
-      r = spawnSync(cmd, { shell: true, encoding: 'utf8', timeout: 30000 });
-    } else return { ok: false, reason: 'no-transport' };
-    if (r.error) { console.log(`(notify failed: ${r.error.message})`); return { ok: false }; }
-    if (r.status !== 0) { console.log(`(notify failed: ${(r.stderr || r.stdout || '').slice(0, 200)})`); return { ok: false }; }
-    return { ok: true };
-  } catch (e) { console.log(`(notify failed: ${e.message})`); return { ok: false }; }
+  if (DRY) return { ok: false, reason: 'dry-run' };
+  return deliver(config, DATA, text);
 }
 
 function alert(msg) {
@@ -83,12 +65,13 @@ function alert(msg) {
   // Routine, non-failure notices (unknown ingredient seen, candidate promoted) must use
   // console.log directly instead, so they never page anyone.
   const line = `[${new Date().toISOString()}] ${msg}`;
-  try { appendFileSync(join(DATA, 'alerts.log'), line + '\n'); } catch {}
+  if (!DRY) try { appendFileSync(join(DATA, 'alerts.log'), line + '\n'); } catch {}
   console.log('ALERT: ' + msg);
   notify('👅 Tastebud alert: ' + msg);
 }
 
-const { codebook } = loadData(DATA);
+const { codebook } = loadData(DATA, config.legacyRows ?? {});
+const DRY = !process.argv.includes('--write');
 const slugLines = Object.entries(codebook.projects)
   .map(([s, p]) => `${s}${p.aliases?.length ? ' (=' + p.aliases.slice(0, 4).join(', ') + ')' : ''}`)
   .join('; ');
@@ -111,13 +94,7 @@ function findLog(date) {
   return r.ok ? r.path : null;
 }
 
-function normalize(parsed) {
-  if (!Array.isArray(parsed.major)) throw new Error('bad shape: major not an array');
-  const total = parsed.major.reduce((s, m) => s + (Number(m.w) || 0), 0) || 1;
-  const major = parsed.major.map(m => ({ slug: String(m.slug), w: +((Number(m.w) || 0) / total).toFixed(3) }));
-  const arr = x => Array.isArray(x) ? x.map(String) : typeof x === 'string' && x ? [x] : [];
-  return { major, minor: arr(parsed.minor), new: arr(parsed.new) };
-}
+function normalize(parsed, date) { return parseProposal(parsed, date, codebook); }
 
 async function localTag(date) {
   if (!LOCAL.url) throw new Error('no localModel configured in tastebud.config.json');
@@ -141,7 +118,7 @@ async function localTag(date) {
       const data = await res.json();
       let txt = data.choices[0].message.content.trim();
       txt = txt.replace(/^```(json)?\s*/i, '').replace(/```\s*$/, '');
-      return normalize(JSON.parse(txt.slice(txt.indexOf('{'), txt.lastIndexOf('}') + 1)));
+      return normalize(JSON.parse(txt.slice(txt.indexOf('{'), txt.lastIndexOf('}') + 1)), date);
     } catch (e) { lastErr = e; }
   }
   throw new Error(`local lane failed after 3 attempts: ${lastErr.message}`);
@@ -154,9 +131,12 @@ async function localTag(date) {
 async function processDate(date, { write, comps, compsPath, refDate }) {
   const inboxPath = join(INBOX, date + '.json');
 
+  if (!realDate(date)) throw new Error('invalid date');
+  if (date >= businessDate(config.timezone ?? 'UTC')) { console.log(`${date}: in-progress/future day, deferred`); return false; }
   if (comps.days.some(d => d.date === date)) {
-    if (existsSync(inboxPath)) { try { unlinkSync(inboxPath); console.log('cleaned stale inbox file'); } catch {} }
-    console.log(`${date} already tagged - nothing to do`);
+    const row = comps.days.find(d => d.date === date), path = findLog(date);
+    const status = !path ? 'missing-source' : row.source_hash === hash(readFileSync(path)) ? 'current' : 'needs-review';
+    console.log(`${date}: ${status}; inbox retained`);
     return false;
   }
 
@@ -176,15 +156,16 @@ async function processDate(date, { write, comps, compsPath, refDate }) {
     return false;
   }
 
-  let g = null, source = null, oneline = '';
+  let proposal = null, g = null, source = null, oneline = '';
   if (existsSync(inboxPath)) {
     try {
-      const raw = JSON.parse(readFileSync(inboxPath, 'utf8'));
-      g = normalize(raw);
+      const raw = JSON.parse(readFileSync(inboxPath, 'utf8')); proposal = raw;
+      if (raw.date !== date) throw new Error('inbox date must match filename');
+      g = normalize(raw, date);
       // oneline rides along in the inbox JSON (see examples/nightly-prompt.md); older files without it get ''.
       if (typeof raw.oneline === 'string') oneline = raw.oneline.trim().slice(0, 100);
       // provenance may be overridden by the inbox writer (e.g. a supervised backfill); default = the primary cron.
-      source = (typeof raw.source === 'string' && /^[a-z0-9.-]{1,40}$/.test(raw.source)) ? raw.source : 'primary-cron';
+      source = config.inboxProducer ?? 'inbox-unverified';
     } catch (e) {
       alert(`inbox file for ${date} exists but is INVALID (${e.message}) - primary tagger output malformed`);
     }
@@ -193,18 +174,18 @@ async function processDate(date, { write, comps, compsPath, refDate }) {
   }
 
   if (!g) {
-    if (!HAS_LOCAL) {
+    if (!write || !HAS_LOCAL) {
       // Fallback lane disabled (localModel is null): skip it with a clear one-liner instead of
       // attempting a call that would only throw. The primary-failure alert already fired above.
       console.log(`no local fallback configured (localModel is null) - ${date} left untagged; set localModel in tastebud.config.json to enable the fallback lane`);
       return false;
     }
     try {
-      g = await localTag(date);
+      proposal = null; g = await localTag(date);
       source = 'local-fallback';
       alert(`tagged ${date} with LOCAL FALLBACK (${LOCAL.model}) because the primary tagger failed - investigate`);
     } catch (e) {
-      alert(`ALL lanes failed for ${date}: ${e.message} - day left untagged, will NOT retry automatically`);
+      alert(`ALL lanes failed for ${date}: ${e.message} - day left untagged; retries continue within the lookback window, then remain visible in coverage`);
       return false;
     }
   }
@@ -216,12 +197,8 @@ async function processDate(date, { write, comps, compsPath, refDate }) {
   if (unknown.length)
     console.log(`unknown ingredient detected on ${date} (${unknown.join(', ')}) - run "node tastebud.mjs tasteslike <slug>" and consider adding it to the codebook.`);
   if (write) {
-    try { copyFileSync(compsPath, compsPath + '.bak'); } catch (e) { alert(`could not write compositions.json.bak (${e.message}) - aborting append to protect the data`); process.exit(1); }
-    comps.days.push(entry);
-    comps.days.sort((x, y) => x.date.localeCompare(y.date));
-    writeFileSync(compsPath, JSON.stringify(comps, null, 1));
-    if (existsSync(inboxPath)) { try { unlinkSync(inboxPath); } catch {} }
-    console.log(`appended ${date} to compositions.json (source: ${source})`);
+    const result = ingest({ data: DATA, date, raw: proposal ?? entry, sourcePath: findLog(date), producer: source, write: true, legacyRows: config.legacyRows ?? {} });
+    console.log(JSON.stringify(result));
   } else console.log(`(dry-run - source would be: ${source})`);
   return true;
 }
@@ -236,7 +213,7 @@ if (mode === 'nightly') {
 
   // Same UTC "yesterday" reference the script has always used; the look-back window
   // is computed from this same instant so behavior is fully deterministic per run.
-  const ref = Date.now() - 86400000;
+  const ref = Date.parse(businessDate(config.timezone ?? 'UTC')) - 86400000;
   const refDate = new Date(ref).toISOString().slice(0, 10);
 
   let dates;
@@ -293,7 +270,7 @@ if (mode === 'nightly') {
   // data files are added by absolute path since the data dir may live outside the script dir.
   // Fully try/caught and status-tolerant: git absent, not a repo, or "nothing to commit" all log
   // ONE console line. This NEVER throws, changes the exit code, notifies, or affects tagging.
-  if (write && (new Date().getDay() === 0 || process.env.TASTEBUD_CHECKPOINT === '1')) {
+  if (write && config.gitCheckpoint === true && (new Date().getDay() === 0 || process.env.TASTEBUD_CHECKPOINT === '1')) {
     try {
       const stamp = new Date().toISOString().slice(0, 10);
       const files = ['codebook.json', 'compositions.json', 'unknowns-ledger.json'].map(f => join(DATA, f));
@@ -301,7 +278,7 @@ if (mode === 'nightly') {
       if (add.error || add.status !== 0) {
         console.log(`(weekly data checkpoint skipped: git add ${add.error ? add.error.message : 'exit ' + add.status})`);
       } else {
-        const commit = spawnSync('git', ['commit', '-m', `Weekly data checkpoint ${stamp}`],
+        const commit = spawnSync('git', ['commit', '--only', '-m', `Weekly data checkpoint ${stamp}`, '--', ...files],
           { cwd: SCRIPT_DIR, encoding: 'utf8', timeout: 30000 });
         if (commit.error) console.log(`(weekly data checkpoint skipped: ${commit.error.message})`);
         else if (commit.status !== 0) console.log('weekly data checkpoint: nothing to commit (data unchanged)');

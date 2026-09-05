@@ -53,7 +53,7 @@ function pidAlive(pid) {
 function tryReap(lp) {
   let rec;
   try { rec = JSON.parse(readFileSync(lp, 'utf8')); } catch { return false; }
-  if (pidAlive(rec.pid)) return false;
+  if (!Number.isInteger(rec.pid) || rec.pid <= 0 || pidAlive(rec.pid)) return false;
   try { unlinkSync(lp); return true; } catch { return false; }
 }
 

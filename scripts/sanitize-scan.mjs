@@ -43,13 +43,10 @@ const badTerms = [...FIXED, ...denyTerms];
 
 // Maintainer name: allowed ONLY at these exact locations (LICENSE + README attribution + repo URLs).
 const NAME = 'mikh' + 'ail';
-const NAME_ALLOW = new Set([
-  'LICENSE:3',
-  'README.md:225',
-  'README.md:240',
-  'README.md:246',
-  'README.md:343',
-]);
+const allowedAttribution = (file,line) =>
+  (file === 'LICENSE' && /^Copyright \(c\) \d{4} /i.test(line)) ||
+  (file === 'README.md' && (line.toLowerCase() === ('MIT. Built by ' + NAME + ' Zaidi with Claude (Anthropic), June 2026.').toLowerCase() || line.toLowerCase() === ('Public repository: https://github.com/' + NAME + '-Za/tastebud-memory').toLowerCase()));
+
 
 const offenders = [];
 for (const f of manifest) {
@@ -63,7 +60,7 @@ for (const f of manifest) {
     for (const term of badTerms) if (term && lc.includes(term)) offenders.push(`${f}:${i + 1}: forbidden term "${term}"`);
     if (lc.includes(NAME)) {
       const loc = `${f}:${i + 1}`;
-      if (!NAME_ALLOW.has(loc)) offenders.push(`${loc}: unexpected maintainer-name occurrence (not in the intentional-attribution allowlist)`);
+      if (!allowedAttribution(f,line)) offenders.push(`${loc}: unexpected maintainer-name occurrence (not in the intentional-attribution allowlist)`);
     }
   });
 }

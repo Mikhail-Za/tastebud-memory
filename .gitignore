@@ -12,3 +12,11 @@ node_modules/
 **/candidate-events.jsonl
 **/autopromote.json
 .sanitize-denylist.local
+
+*.sqlite
+*.sqlite-wal
+*.sqlite-shm
+**/source-versions/
+**/composition-revisions/
+**/proposals/
+**/promotion-artifacts/
