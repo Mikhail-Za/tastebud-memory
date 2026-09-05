@@ -340,4 +340,4 @@ sweeper + alerted local fallback) is in [`docs/production-pattern.md`](docs/prod
 
 ## License
 
-MIT. Built by Mikhail Zaidi with Claude (Anthropic), June 2026.
+MIT. 
