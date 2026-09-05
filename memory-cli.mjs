@@ -14,7 +14,7 @@ const [command, ...args] = process.argv.slice(2);
 let memory;
 try {
   const data = resolve(config._configDir, config.dataDir ?? './examples');
-  memory = new Memory(config, { readonly: ['brief', 'search', 'history', 'health'].includes(command) });
+  memory = new Memory(config, { readonly: ['brief', 'preferences', 'search', 'history', 'health'].includes(command) });
   let result;
   if (command === 'sync') {
     const { codebook } = loadData(data, config.legacyRows ?? {});
@@ -38,7 +38,8 @@ try {
     };
     for (const dir of config.memorySourceDirs ?? []) walk(resolve(config._configDir, dir));
     result = { projects, sources, changed, health: memory.health().integrity };
-  } else if (command === 'brief') result = memory.brief({ project: args[0], task: args[1] ?? '', budget: Number(args[2] ?? 1600), as_of: args[3] });
+  } else if (command === 'brief') result = memory.brief({ project: args[0], task: args[1] ?? '', budget: Number(args[2] ?? 1600), as_of: args[3], domain:args[4] });
+  else if (command === 'preferences') result = memory.preferences({project:args[0],domain:args[1]});
   else if (command === 'search') result = memory.search(args.join(' '));
   else if (command === 'history') result = memory.history(args[0]);
   else if (command === 'health') result = memory.health();
@@ -54,7 +55,7 @@ try {
     result = exactQuery(config, codebook, comps, 'coverage');
   } else if (command === 'ingest') {
     result = ingest({ data, date: args[0], raw: JSON.parse(readFileSync(args[1], 'utf8')), sourcePath: args[2], write: args.includes('--write'), revise: args.includes('--revise'), producer: process.env.TASTEBUD_PRODUCER ?? 'local-operator', legacyRows: config.legacyRows ?? {} });
-  } else throw new Error('commands: sync | brief PROJECT [TASK] [BUDGET] [AS_OF] | search QUERY | history PROJECT | health | record [FILE] | source PATH | archive SOURCE_ID | backup PATH | coverage | ingest DATE PROPOSAL SOURCE [--write] [--revise]');
+  } else throw new Error('commands: sync | brief PROJECT [TASK] [BUDGET] [AS_OF] [DOMAIN] | preferences PROJECT [DOMAIN] | search QUERY | history PROJECT | health | record [FILE] | source PATH | archive SOURCE_ID | backup PATH | coverage | ingest DATE PROPOSAL SOURCE [--write] [--revise]');
   console.log(JSON.stringify(result, null, 2));
 } catch (e) { console.error(`tastebud: ${e.message}`); process.exitCode = 1; }
 finally { memory?.close(); }

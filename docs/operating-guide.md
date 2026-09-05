@@ -4,6 +4,8 @@
 
 Request `memory_brief` with the project name, current task, and a context budget (default 1600 estimated tokens). Briefs enforce a UTF-8 byte ceiling of three bytes per budget unit; the token count is an estimate, not a tokenizer guarantee. Inspect `omitted`, expired/disputed claims, source-change flags, and `coverage`. Empty actions can mean no structured task history has been captured; they do not prove a project has no remaining work. Use `memory_evidence` for the cited revision and `memory_history` for earlier claims or task outcomes.
 
+Check the brief's `preferences` state and completeness. Approved rules precede claims; `incomplete: true` requires the full `memory_preferences` lookup. Read the [preference workflow](preferences.md) for scope, exceptions, agent proposals, owner confirmation, corrections and separate intent-alignment feedback. Agents must not launch owner review servers, call their approval APIs or impersonate owner chat commands.
+
 Use exact queries for membership, dates, and activity windows. Use `memory_search` for local full-text evidence retrieval. An existing semantic-search service can remain a complementary retrieval path; the default store works offline.
 
 ## Capture a decision or correction

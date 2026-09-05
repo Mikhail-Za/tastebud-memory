@@ -16,6 +16,8 @@ npm test
 
 The example data is fictional. Put real data outside this repository and point `TASTEBUD_CONFIG` at its configuration file. See [configuration](docs/configuration.md) and the [operating guide](docs/operating-guide.md).
 
+[Explicit preferences](docs/preferences.md) add a user-controlled register and pending proposal queue. Agents report applications; the owner approves exact revisions through a local review page or trusted host adapter. Usage and successful outcomes never activate or strengthen a rule.
+
 ## The memory loop
 
 1. Capture source revisions and register stable project identities with `memory-cli.mjs sync`.

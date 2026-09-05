@@ -1,0 +1,23 @@
+.preference-page { margin:0; background:#111820; color:#e9edf3; font:16px/1.5 system-ui,sans-serif; }
+.preference-review { max-width:1100px; margin:auto; padding:24px; color:inherit; }
+.preference-review h1 { font-size:1.8rem; margin:0 0 8px; }
+.preference-review h2 { margin-top:32px; font-size:1.3rem; }
+.preference-review article,.preference-review form,.preference-review details { border:1px solid #64748b; border-radius:8px; padding:16px; margin:12px 0; }
+.preference-review p { white-space:pre-wrap; overflow-wrap:anywhere; }
+.preference-review .pr-muted { opacity:.8; font-size:.9rem; }
+.preference-review .pr-warning { color:#e6b953; }
+.preference-review .pr-diff { display:grid; grid-template-columns:1fr 1fr; gap:20px; }
+.preference-review .pr-diff section { min-width:0; }
+.preference-review pre { white-space:pre-wrap; overflow-wrap:anywhere; font-size:.8rem; }
+.preference-review button { font:inherit; border:1px solid #8b9bb1; border-radius:5px; padding:7px 12px; margin:4px 8px 4px 0; cursor:pointer; color:inherit; background:transparent; }
+.preference-review button:disabled { opacity:.4; cursor:default; }
+.preference-review button.pr-primary { background:#28684f; color:white; }
+.preference-review :focus-visible { outline:3px solid #6bbdff; outline-offset:3px; }
+.preference-review label { display:block; margin:12px 0; }
+.preference-review input,.preference-review textarea,.preference-review select { display:block; box-sizing:border-box; width:100%; font:inherit; background:#182330; color:#e9edf3; border:1px solid #8b9bb1; border-radius:4px; padding:8px; }
+.preference-review textarea { min-height:90px; }
+.preference-review summary { cursor:pointer; }
+.preference-review dialog { color:#e9edf3; background:#182330; max-height:85vh; max-width:900px; overflow:auto; border:1px solid #8b9bb1; border-radius:8px; }
+.preference-review dialog::backdrop { background:#000a; }
+.preference-review [role=status] { min-height:24px; }
+@media(max-width:700px) { .preference-review { padding:14px; } .preference-review .pr-diff { grid-template-columns:1fr; gap:8px; } }
