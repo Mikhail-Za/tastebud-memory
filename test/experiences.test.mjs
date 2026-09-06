@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, unlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { spawn, spawnSync } from 'node:child_process';
@@ -45,10 +45,13 @@ test('workspace experience transfers by structure and keeps adverse details rout
   const target=f.memory.experience({project:'greenhouse',id:'exp-1'});
   assert.equal(target.applications[0].fully_validated,true);
   assert.equal(target.application_history[0].fully_validated,false);
-  writeFileSync(join(f.root,'projects/evidence.md'),'Uncaptured fictional edit.');
+  unlinkSync(join(f.root,'projects/evidence.md')); mkdirSync(join(f.root,'projects/evidence.md'));
+  assert.equal(f.memory.experiences({project:'greenhouse',features:features('greenhouse')}).suggestions[0].id,'exp-1');
+  assert.doesNotThrow(()=>f.memory.brief({project:'greenhouse',task:'recover queue',features:features('greenhouse')}));
   const changed=f.memory.experience({project:'greenhouse',id:'exp-1'});
   assert.equal(changed.evidence[0].captured_source_changed,false);
-  assert.equal(changed.evidence[0].filesystem_status,'changed');
+  assert.equal(changed.evidence[0].filesystem_status,'unreadable');
+  assert.equal(changed.applications[0].evidence[0].filesystem_status,'unreadable');
   f.memory.close();
 });
 
@@ -77,6 +80,22 @@ test('correction lineage makes earlier applications stale without rebinding IDs'
   f.memory.close();
 });
 
+test('validation scans prior events across wall-clock rollback and rejects future-recorded references', () => {
+  const f=fixture(); f.memory.record(exp('exp-1',f.source),'a');
+  f.memory.record(exp('exp-2',f.source,{supersedes:'exp-1',evidence:evidence(f.source,'A correction narrowed the condition.')}),'a');
+  f.memory.db.prepare('UPDATE events SET recorded_at=? WHERE id=?').run('2999-01-01T00:00:00.000Z','exp-2');
+  assert.throws(()=>f.memory.record(exp('fork-after-rollback',f.source,{supersedes:'exp-1',evidence:evidence(f.source,'A correction narrowed the condition.')}),'a'),/already superseded/);
+  f.memory.db.prepare('UPDATE events SET recorded_at=? WHERE id=?').run(new Date().toISOString(),'exp-2');
+  f.memory.record(app('clock-plan',{experience_id:'exp-2'}),'b');
+  const collision=app('collision',{experience_id:'exp-2'}); collision.project='orchard';
+  assert.throws(()=>f.memory.record(collision,'c'),/workspace-global.*greenhouse/);
+  f.memory.record(app('clock-result',{experience_id:'exp-2',previous_event_id:'clock-plan',status:'evaluated',outcome:'succeeded',checks:[{name:'retry',result:'passed'}],evidence:evidence(f.source,'A bounded retry cleared the queue.')}),'b');
+  f.memory.db.prepare('UPDATE events SET recorded_at=? WHERE id=?').run('2999-01-01T00:00:00.000Z','clock-result');
+  assert.throws(()=>f.memory.record(app('stale-after-rollback',{experience_id:'exp-2',previous_event_id:'clock-plan'}),'b'),/application changed/);
+  assert.throws(()=>f.memory.record(app('future-reference',{experience_id:'exp-2',previous_event_id:'clock-result'}),'b'),/recorded_at/);
+  f.memory.close();
+});
+
 test('two processes accept only one next application revision', async () => {
   const f=fixture(); f.memory.record(exp('exp-1',f.source),'a'); f.memory.record(app('app-plan'),'b'); f.memory.close();
   const events=['race-a','race-b'].map(id=>app(id,{previous_event_id:'app-plan',adaptation:`Competing adaptation ${id}.`}));
@@ -96,6 +115,9 @@ test('two processes accept only one correction and retired lessons reject new ap
   const memory=new Memory(f.config), current=memory.experiences({project:'orchard',features:features()}).suggestions[0].id;
   memory.record(exp('retired',f.source,{supersedes:current,retired:true,evidence:evidence(f.source,'A correction narrowed the condition.')}),'a');
   assert.equal(memory.experiences({project:'orchard',features:features()}).suggestions.length,0);
+  assert.equal(memory.experience({project:'orchard',id:current}).event_retired,false);
+  assert.equal(memory.experience({project:'orchard',id:current}).retired,true);
+  assert.equal(memory.experience({project:'orchard',id:'retired'}).event_retired,true);
   assert.throws(()=>memory.record(app('after-retire',{experience_id:'retired'}),'b'),/nonretired/); memory.close();
 });
 
