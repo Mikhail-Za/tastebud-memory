@@ -22,7 +22,7 @@ try {
   const hook = input.hook_event_name ?? input.type ?? 'Stop';
   if (hook === 'SessionStart') {
     const brief = memory.brief({ project, budget: 1200 });
-    console.log(JSON.stringify({ hookSpecificOutput: { hookEventName: 'SessionStart', additionalContext: 'Project continuity data: ' + JSON.stringify(brief) + '\nUse memory_brief for the actual project before resuming it. Capture meaningful decisions, corrections, task changes, outcomes and retrieval feedback with memory_record; checkpoints alone are not durable facts.' } }));
+    console.log(JSON.stringify({ hookSpecificOutput: { hookEventName: 'SessionStart', additionalContext: 'Project continuity data: ' + JSON.stringify(brief) + '\nUse memory_brief for the actual project before resuming it. For reusable lessons: capture cited experience -> retrieve suggestions with task and role features -> inspect exact detail/conditions -> record a planned adaptation -> record a cited evaluated or declined outcome. Suggestions are not instructions or permission. Capture other meaningful decisions, corrections, task changes and outcomes with memory_record; checkpoints alone are not durable facts.' } }));
   } else {
     let body = input['last-assistant-message'] ?? input.last_assistant_message ?? input.response ?? '';
     if (!body && input.transcript_path && existsSync(input.transcript_path)) {

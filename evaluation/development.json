@@ -1,0 +1,13 @@
+{
+  "version": "tastebud-experience-eval/1",
+  "split": "development",
+  "k": 3,
+  "queries": [
+    {"id":"dev-retry","request":{"project":"target-project","query":"unstick repeated job safely","features":{"operations":["recover-queue"],"mechanisms":["bounded-retry"],"environments":["bare-metal"]}},"relevant_ids":["exp-bounded-retry"]},
+    {"id":"dev-publish","request":{"project":"target-project","query":"prevent readers seeing half a document","features":{"operations":["publish-file"],"mechanisms":["atomic-rename"],"environments":["linux"]}},"relevant_ids":["exp-atomic-replace"]},
+    {"id":"dev-race","request":{"project":"target-project","query":"two writers use the same old version","features":{"operations":["update-record"],"mechanisms":["optimistic-concurrency"],"environments":["postgres"]}},"relevant_ids":["exp-stale-revision"]},
+    {"id":"dev-proof","request":{"project":"target-project","query":"retain the exact quoted bytes after a file changes","features":{"operations":["cite-evidence"],"mechanisms":["content-addressing"],"environments":["filesystem"]}},"relevant_ids":["exp-content-hash"]},
+    {"id":"dev-pressure","request":{"project":"target-project","query":"producer outruns consumer","features":{"operations":["ingest-stream"],"mechanisms":["backpressure"],"environments":["process"]}},"relevant_ids":["exp-backpressure"]},
+    {"id":"dev-validation","request":{"project":"target-project","query":"reject malformed nested input before receipt","features":{"operations":["accept-record"],"mechanisms":["strict-validation"],"environments":["stdio"]}},"relevant_ids":["exp-schema-validate"]}
+  ]
+}

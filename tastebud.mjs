@@ -44,6 +44,7 @@ import { loadConfig, validateConfig, loadData, validateCandidateDirs, resolveLog
 import { withLock, writeAtomic, writeFully } from './lock.mjs';
 import { aliasIndex, nameKey, businessDate } from './lib/schema.mjs';
 import { exactQuery } from './lib/exact.mjs';
+import { fnv1a, vector, dot, norm } from './lib/fingerprints.mjs';
 
 // Runtime floor: this engine uses ESM + global fetch (Node 18+). Fail fast with one line
 // rather than a confusing "fetch is not defined" deeper in.
@@ -60,31 +61,7 @@ const DATA = resolve(config._configDir, config.dataDir ?? './examples');
 const D = config.dimensions ?? 4096;
 
 // ---------- deterministic ±1 hypervectors ----------
-function fnv1a(str) {
-  let h = 0x811c9dc5;
-  for (let i = 0; i < str.length; i++) { h ^= str.charCodeAt(i); h = Math.imul(h, 0x01000193); }
-  return h >>> 0;
-}
-function mulberry32(seed) {
-  let a = seed >>> 0;
-  return () => {
-    a |= 0; a = (a + 0x6D2B79F5) | 0;
-    let t = Math.imul(a ^ (a >>> 15), 1 | a);
-    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
-    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
-  };
-}
-const vecCache = new Map();
-function vec(slug) {
-  if (vecCache.has(slug)) return vecCache.get(slug);
-  const rng = mulberry32(fnv1a(slug));
-  const v = new Int8Array(D);
-  for (let i = 0; i < D; i++) v[i] = rng() < 0.5 ? -1 : 1;
-  vecCache.set(slug, v);
-  return v;
-}
-const dot = (a, b) => { let s = 0; for (let i = 0; i < D; i++) s += a[i] * b[i]; return s; };
-const norm = a => Math.sqrt(dot(a, a));
+const vec = slug => vector(slug, D);
 
 // ---------- data ----------
 // Normalize a raw compositions object into sorted, weight-normalized day rows. Pure so it serves

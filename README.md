@@ -1,6 +1,6 @@
 # Tastebud Memory
 
-Tastebud helps agents resume projects with cited decisions, corrections, open actions, and recoverable history. It combines exact project/date queries with a local SQLite continuity store. Fingerprint similarity remains available as an experiment.
+Tastebud helps agents resume projects with cited decisions, corrections, open actions, reusable experiences, and recoverable history. It combines exact project/date queries with a local SQLite continuity store. Deterministic fingerprints can suggest structurally similar experience candidates alongside simpler exact feature retrieval.
 
 Requires Node **22.16+** (Node 24 recommended). No npm runtime dependencies. SQLite is provided by Node; some Node releases print an experimental-feature warning.
 
@@ -26,6 +26,8 @@ The example data is fictional. Put real data outside this repository and point `
 4. SQLite commits the event and its receipt together. Retrying the same event is safe; conflicting reuse of an ID fails.
 5. A correction explicitly supersedes the prior claim. Completing a task requires an outcome and the current revision ID.
 6. Briefs expose the current view, while evidence revisions and event history remain recoverable.
+
+[Cross-project experiences](docs/experiences.md) add a portable capture → recognize → inspect/adapt → outcome loop. Workspace-scoped lessons can be suggested to another project by explicit role features, but full conditions and limits must be inspected before use. Application outcomes never rank lessons, activate preferences, or grant permission.
 
 A supported claim means its quotation matches a captured source. It does **not** establish truth, user approval, or permission to act. Agent turn summaries remain unreviewed checkpoints. Source changes, expired claims, negative feedback, and omitted context are visible.
 
@@ -59,7 +61,7 @@ Register `mcp-server/server.mjs` with an MCP client:
 }
 ```
 
-Read tools include exact queries, `memory_brief`, `memory_search`, `memory_evidence`, `memory_history`, and `memory_health`. `memory_source` and `memory_record` require write mode. Producer attribution comes from client configuration; it is a local process label, not cryptographic proof of a model or human identity. The server validates arguments, returns structured results, and marks failures with `isError: true`.
+Read tools include exact queries, `memory_brief`, `memory_experiences`, `memory_experience`, `memory_search`, `memory_evidence`, `memory_history`, and `memory_health`. `memory_source` and `memory_record` require write mode. Producer attribution comes from client configuration; it is a local process label, not cryptographic proof of a model or human identity. The server validates arguments, returns structured results, and marks failures with `isError: true`.
 
 `scripts/capture.mjs` adapts session-start and turn-completion hooks. It loads a bounded brief at session start and stores substantive turn summaries as checkpoints. Configure it using the host client's supported hooks or notification mechanism; registration and reload requirements differ between clients. It does not automatically infer approved decisions from a transcript.
 

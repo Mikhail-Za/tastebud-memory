@@ -6,6 +6,8 @@
   "engines": { "node": ">=22.16.0" },
   "scripts": {
     "test": "node --test test/*.test.mjs && node tastebud.mjs selftest-candidates",
-    "check": "node tastebud.mjs check"
+    "check": "node tastebud.mjs check",
+    "benchmark:experiences": "node evaluation/run.mjs",
+    "demo:experiences": "node examples/experience-transfer-demo.mjs"
   }
 }
